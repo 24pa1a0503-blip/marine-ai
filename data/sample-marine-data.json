@@ -1,0 +1,40 @@
+{
+  "location": {
+    "lat": 16.98,
+    "lon": 82.24
+  },
+
+  "timestamp": "2026-09-01T10:00:00Z",
+
+  "weather": {
+    "windSpeed": 18,
+    "windDirection": 135,
+    "rainProbability": 30,
+    "lightning": false
+  },
+
+  "ocean": {
+    "waveHeight": 1.4,
+    "wavePeriod": 7,
+    "sst": 28.4,
+    "chlorophyll": 2.1,
+    "currentSpeed": 0.8,
+    "currentDirection": 120
+  },
+
+  "hazards": {
+    "cyclone": false,
+    "stormSurge": false,
+    "highWave": false
+  },
+
+  "pfz": {
+    "available": true,
+    "confidence": 0.82
+  },
+
+  "geofence": {
+    "restricted": false,
+    "zone": null
+  }
+}
