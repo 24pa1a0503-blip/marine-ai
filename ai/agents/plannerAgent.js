@@ -72,6 +72,10 @@ function fallbackCreatePlan(intent, userQuery) {
     GEOFENCE_CHECK: [
       "checkGeofence"
     ],
+    HAZARD_ALERT: [
+      "getWarnings",
+      "calculateRisk"
+    ],
     GENERAL_QUERY: []
   };
 
@@ -80,6 +84,8 @@ function fallbackCreatePlan(intent, userQuery) {
   return {
     intent: intent,
     tasks: tasks,
-    reasoning: `Mapped intent '${intent}' to standard Day-1 execution sequence: [${tasks.join(', ')}]`
+    reasoning: `Mapped intent '${intent}' to standard execution sequence: [${tasks.join(', ')}]`
   };
 }
+
+

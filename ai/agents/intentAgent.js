@@ -12,6 +12,7 @@ dotenv.config();
  * - SAFE_ROUTE
  * - MARINE_CONDITIONS
  * - GEOFENCE_CHECK
+ * - HAZARD_ALERT
  * - GENERAL_QUERY
  */
 export async function detectIntent(userQuery) {
@@ -20,6 +21,8 @@ export async function detectIntent(userQuery) {
       intent: 'GENERAL_QUERY',
       locationRequired: false,
       timeRequired: false,
+      destinationRequired: false,
+      language: 'en',
       confidence: 1.0,
       reasoning: 'Empty or invalid user query provided.'
     };
@@ -44,6 +47,8 @@ export async function detectIntent(userQuery) {
           intent: parsed.intent,
           locationRequired: Boolean(parsed.locationRequired),
           timeRequired: Boolean(parsed.timeRequired),
+          destinationRequired: Boolean(parsed.destinationRequired),
+          language: parsed.language || detectLanguage(userQuery),
           confidence: parsed.confidence || 0.95,
           reasoning: parsed.reasoning || 'Classified via Gemini LLM'
         };
@@ -58,23 +63,68 @@ export async function detectIntent(userQuery) {
 }
 
 /**
- * Fallback rule-based classifier ensuring test suite passes without API key
+ * Helper to detect basic language scripts
+ */
+function detectLanguage(text) {
+  // Telugu Unicode block range \u0C00-\u0C7F
+  if (/[\u0C00-\u0C7F]/.test(text)) return 'te';
+  // Hindi (Devanagari) Unicode block range \u0900-\u097F
+  if (/[\u0900-\u097F]/.test(text)) return 'hi';
+  // Tamil Unicode block range \u0B80-\u0BFF
+  if (/[\u0B80-\u0BFF]/.test(text)) return 'ta';
+  return 'en';
+}
+
+/**
+ * Fallback rule-based classifier ensuring test suite passes deterministically
  */
 function fallbackDetectIntent(userQuery) {
   const query = userQuery.toLowerCase();
+  const lang = detectLanguage(userQuery);
 
-  // 1. SAFE_ROUTE check (higher priority if query asks for route/path to PFZ/fishing zone)
-  if (query.includes('route') || query.includes('path') || query.includes('navigation') || query.includes('way to')) {
+  // 1. HAZARD_ALERT check
+  if (
+    query.includes('alert') ||
+    query.includes('warning') ||
+    query.includes('cyclone') ||
+    query.includes('tsunami') ||
+    query.includes('storm') ||
+    query.includes('emergency') ||
+    query.includes('ప్రమాదం') ||
+    query.includes('హెచ్చరిక')
+  ) {
+    return {
+      intent: 'HAZARD_ALERT',
+      locationRequired: true,
+      timeRequired: true,
+      destinationRequired: false,
+      language: lang,
+      confidence: 0.97,
+      reasoning: 'Query asks about active weather warnings, cyclone alerts, or emergency hazards.'
+    };
+  }
+
+  // 2. SAFE_ROUTE check
+  if (
+    query.includes('route') || 
+    query.includes('path') || 
+    query.includes('navigation') || 
+    query.includes('way to') ||
+    query.includes('దోవ') ||
+    query.includes('రహదారి')
+  ) {
     return {
       intent: 'SAFE_ROUTE',
       locationRequired: true,
       timeRequired: false,
+      destinationRequired: true,
+      language: lang,
       confidence: 0.98,
       reasoning: 'Query explicitly requests route, path, or safe navigation instructions.'
     };
   }
 
-  // 2. MARINE_SAFETY check
+  // 3. MARINE_SAFETY check
   if (
     query.includes('safe') || 
     query.includes('can i go') || 
@@ -83,19 +133,23 @@ function fallbackDetectIntent(userQuery) {
     query.includes('risk') || 
     query.includes('danger') || 
     query.includes('safety') ||
-    query.includes('go fishing')
+    query.includes('go fishing') ||
+    query.includes('వేటకు వెళ్ళవచ్చా') ||
+    query.includes('సురక్షితమేనా')
   ) {
-    const timeReq = query.includes('tomorrow') || query.includes('morning') || query.includes('today') || query.includes('tonight') || query.includes('next');
+    const timeReq = query.includes('tomorrow') || query.includes('morning') || query.includes('today') || query.includes('tonight') || query.includes('రేపు');
     return {
       intent: 'MARINE_SAFETY',
       locationRequired: true,
       timeRequired: timeReq,
+      destinationRequired: false,
+      language: lang,
       confidence: 0.96,
       reasoning: 'Query asks about safety, trip feasibility, or fishing permission.'
     };
   }
 
-  // 3. PFZ_SEARCH check
+  // 4. PFZ_SEARCH check
   if (
     query.includes('pfz') || 
     query.includes('potential fishing zone') || 
@@ -103,18 +157,21 @@ function fallbackDetectIntent(userQuery) {
     query.includes('nearest pfz') || 
     query.includes('where is the nearest') ||
     query.includes('catch fish') ||
-    query.includes('fish concentration')
+    query.includes('fish concentration') ||
+    query.includes('చేపల మండలం')
   ) {
     return {
       intent: 'PFZ_SEARCH',
       locationRequired: true,
       timeRequired: false,
+      destinationRequired: false,
+      language: lang,
       confidence: 0.99,
       reasoning: 'Query asks for Potential Fishing Zone location or nearest fishing spot.'
     };
   }
 
-  // 4. MARINE_CONDITIONS check
+  // 5. MARINE_CONDITIONS check
   if (
     query.includes('weather') || 
     query.includes('wave') || 
@@ -122,41 +179,51 @@ function fallbackDetectIntent(userQuery) {
     query.includes('current') || 
     query.includes('temperature') || 
     query.includes('sea condition') ||
-    query.includes('tide')
+    query.includes('tide') ||
+    query.includes('వాతావరణం') ||
+    query.includes('అలలు')
   ) {
     return {
       intent: 'MARINE_CONDITIONS',
       locationRequired: true,
       timeRequired: true,
+      destinationRequired: false,
+      language: lang,
       confidence: 0.95,
       reasoning: 'Query asks for oceanographic or weather metrics.'
     };
   }
 
-  // 5. GEOFENCE_CHECK check
+  // 6. GEOFENCE_CHECK check
   if (
     query.includes('border') || 
     query.includes('geofence') || 
     query.includes('restricted') || 
     query.includes('imbl') || 
     query.includes('international line') ||
-    query.includes('legal zone')
+    query.includes('legal zone') ||
+    query.includes('హద్దు')
   ) {
     return {
       intent: 'GEOFENCE_CHECK',
       locationRequired: true,
       timeRequired: false,
+      destinationRequired: false,
+      language: lang,
       confidence: 0.96,
       reasoning: 'Query asks about boundary limits or restricted maritime zones.'
     };
   }
 
-  // 6. GENERAL_QUERY default
+  // 7. GENERAL_QUERY default
   return {
     intent: 'GENERAL_QUERY',
     locationRequired: false,
     timeRequired: false,
+    destinationRequired: false,
+    language: lang,
     confidence: 0.85,
     reasoning: 'Query classified as general conversation or non-maritime inquiry.'
   };
 }
+
