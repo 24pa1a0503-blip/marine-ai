@@ -1,14 +1,14 @@
-const thresholds = {
+const THRESHOLDS = {
   wind: {
-    low: 10,
-    moderate: 20,
-    high: 30,
+    low: 15,
+    moderate: 25,
+    high: 35,
   },
 
-  wave: {
-    low: 1,
-    moderate: 2,
-    high: 3,
+  waveHeight: {
+    low: 1.5,
+    moderate: 2.5,
+    high: 4.0,
   },
 
   rainProbability: {
@@ -16,6 +16,12 @@ const thresholds = {
     moderate: 60,
     high: 80,
   },
+
+  lightning: {
+    low: 0,
+    moderate: 1,
+    high: 3,
+  },
 };
 
-module.exports = thresholds;
+module.exports = THRESHOLDS;
