@@ -1,13 +1,11 @@
-const calculateRisk = require("./riskCalculator");
+const { calculateRisk } = require("./riskCalculator");
 
-const marineData = {
-  windSpeed: 35,
-  waveHeight: 3.5,
-  rainProbability: 90,
-  lightning: true,
+const conditions = {
+  wind: 45,
+  waveHeight: 5,
+  rainProbability: 95,
+  lightning: 5,
   cyclone: true,
 };
 
-const result = calculateRisk(marineData);
-
-console.log(result);
+console.log(calculateRisk(conditions));
