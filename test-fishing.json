@@ -1,0 +1,19 @@
+{
+  "latitude": 16.70,
+  "longitude": 82.30,
+  "rows": 5,
+  "cols": 5,
+  "hazardCells": [
+    {
+      "row": 2,
+      "col": 2,
+      "riskCost": 50
+    }
+  ],
+  "restrictedCells": [
+    {
+      "row": 1,
+      "col": 1
+    }
+  ]
+}

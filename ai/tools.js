@@ -93,6 +93,45 @@ function getLocation(params = {}) {
 
 export const tools = {
   // ==================================================
+  // UNIFIED MARINE ANALYSIS
+  // ==================================================
+  analyzeMarine: async (params = {}) => {
+    console.log("  [Tool Executing] analyzeMarine");
+
+    const { latitude, longitude } = getLocation(params);
+
+    console.log("  [analyzeMarine Location]", { latitude, longitude });
+
+    const live = await fetchBackend("/marine/analyze", {
+      method: "POST",
+      body: {
+        latitude,
+        longitude,
+      },
+    });
+
+    if (live) {
+      console.log(
+        "  [analyzeMarine Backend Data]",
+        JSON.stringify(live.data, null, 2),
+      );
+      return live;
+    }
+
+    return {
+      success: false,
+      source: "[LIVE_DATA_UNAVAILABLE]",
+      data: {
+        status: "UNKNOWN",
+        message:
+          "Unified marine analysis is currently unavailable. Do not assume the vessel is safe.",
+        latitude,
+        longitude,
+      },
+    };
+  },
+
+  // ==================================================
   // PFZ
   // ==================================================
 

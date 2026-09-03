@@ -54,7 +54,11 @@ async function analyzeMarine(req, res) {
     // Safety override.
     let safetyStatus = "PROCEED";
 
-    if (warning?.level === "HIGH" || risk.level === "EXTREME") {
+    if (
+      warning?.level === "HIGH" ||
+      risk.level === "EXTREME" ||
+      geofence?.insideRestrictedZone === true
+    ) {
       safetyStatus = "DO_NOT_SAIL";
     } else if (risk.level === "HIGH" || geofence?.status === "CAUTION") {
       safetyStatus = "CAUTION";
