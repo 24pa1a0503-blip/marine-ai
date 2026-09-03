@@ -1,9 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import MarineMap from './components/MarineMap';
 import PFZInfoCard from './components/PFZInfoCard';
+import GeofenceAlert from './components/GeofenceAlert';
 import { findNearestPFZ } from './gis/spatialQueries';
+import { checkPointGeofence } from './gis/geofence';
+import { createRouteGeoJSON } from './gis/layers/routeLayer';
+import { createRiskGridGeoJSON } from './gis/layers/riskGridLayer';
+import { runMustPassTests } from './gis/test_runner';
 
-// Static Fallback Dataset if Backend API is offline
 const FALLBACK_PFZS = [
     { id: "PFZ-BOB-001", name: "Kakinada Deep Sea Eddy", latitude: 16.82, longitude: 82.62, pfz_score: 96, category: "VERY_HIGH", sst: 26.8, chlorophyll: 2.85, depth: 45, confidence: 95, advisory: "Prime pelagic aggregation zone along thermal front." },
     { id: "PFZ-BOB-002", name: "Visakhapatnam Shelf", latitude: 17.25, longitude: 83.45, pfz_score: 84, category: "HIGH", sst: 27.1, chlorophyll: 2.15, depth: 62, confidence: 88, advisory: "Favourable coastal upwelling detected by satellite IR sensor." },
@@ -17,34 +21,35 @@ export default function App() {
     const [activeCategory, setActiveCategory] = useState("ALL");
     const [selectedPfz, setSelectedPfz] = useState(null);
     const [nearestData, setNearestData] = useState({ nearest: null, allSorted: [] });
-    
-    // Day 2 Requirement: Loading & Error States
+
+    // Layer Toggles
+    const [showGeofences, setShowGeofences] = useState(true);
+    const [showRiskGrid, setShowRiskGrid] = useState(false);
+    const [showRoute, setShowRoute] = useState(true);
+
+    // Hazard Route Simulation State
+    const [simulateHazardRoute, setSimulateHazardRoute] = useState(false);
+    const [testResults, setTestResults] = useState(null);
+
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [isApiLive, setIsApiLive] = useState(false);
 
-    // Fetch PFZ Data from Backend API /api/pfz or /api/pfz/nearby
+    // Fetch PFZ Data
     const fetchPFZData = useCallback(async (cat = activeCategory) => {
         setLoading(true);
         setError(null);
         try {
             const url = `http://localhost:8000/api/pfz?category=${cat}`;
             const response = await fetch(url);
-            
-            if (!response.ok) {
-                throw new Error(`Server returned HTTP status ${response.status}`);
-            }
-            
+            if (!response.ok) throw new Error(`HTTP status ${response.status}`);
             const data = await response.json();
-            const fetched = data.pfzs || [];
-            setPfzList(fetched);
+            setPfzList(data.pfzs || []);
             setIsApiLive(true);
         } catch (err) {
-            console.warn("Backend API offline, loading verified GIS fallback data:", err.message);
-            setError("Backend API offline. Operating in Cached Satellite Mode.");
+            console.warn("Backend API offline, operating in cached GIS mode:", err.message);
+            setError("Backend API offline. Operating in Cached Satellite GIS Mode.");
             setIsApiLive(false);
-            
-            // Filter fallback data by category
             if (cat && cat !== "ALL") {
                 setPfzList(FALLBACK_PFZS.filter(p => p.category === cat));
             } else {
@@ -59,26 +64,44 @@ export default function App() {
         fetchPFZData(activeCategory);
     }, [activeCategory, fetchPFZData]);
 
-    // Recalculate Nearest PFZ whenever user location or PFZ list changes
     useEffect(() => {
         if (pfzList.length > 0) {
             const result = findNearestPFZ(userLocation.lat, userLocation.lon, pfzList);
             setNearestData(result);
-        } else {
-            setNearestData({ nearest: null, allSorted: [] });
         }
     }, [userLocation, pfzList]);
 
-    const handleCategoryChange = (category) => {
-        setActiveCategory(category);
-        setSelectedPfz(null);
-    };
+    // Check Geofence status for User Location
+    const pointGeofenceCheck = checkPointGeofence(userLocation.lat, userLocation.lon);
 
-    const handleResetLocation = () => {
-        setUserLocation({ lat: 16.98, lon: 82.24 });
-    };
+    // Define Vessel Route Waypoints
+    const targetPfz = selectedPfz || nearestData.nearest;
+    const waypoints = simulateHazardRoute
+        ? [
+            { lat: userLocation.lat, lon: userLocation.lon },
+            { lat: 16.80, lon: 82.35 }, // Passes inside Coringa MPA Restricted Zone!
+            { lat: targetPfz?.latitude || 16.82, lon: targetPfz?.longitude || 82.62 }
+        ]
+        : targetPfz ? [
+            { lat: userLocation.lat, lon: userLocation.lon },
+            { lat: targetPfz.latitude, lon: targetPfz.longitude }
+        ] : [];
 
-    const displayPfz = selectedPfz || nearestData.nearest;
+    // Generate Route GeoJSON & Check Hazard Breaches
+    const routeObj = createRouteGeoJSON(waypoints);
+
+    // Generate Risk Grid GeoJSON for Member 4
+    const riskGridGeoJSON = createRiskGridGeoJSON();
+
+    // Determine Active Geofence Alert
+    const activeGeofenceAlert = pointGeofenceCheck.isInside
+        ? pointGeofenceCheck
+        : routeObj.geofenceCheck;
+
+    const handleRunTests = () => {
+        const res = runMustPassTests();
+        setTestResults(res);
+    };
 
     return (
         <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
@@ -90,140 +113,120 @@ export default function App() {
                     </div>
                     <div>
                         <h1 className="font-extrabold text-lg text-white tracking-wide">
-                            SamudraDrishti <span className="text-xs bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded border border-teal-500/30">SIH 2026 Day 2</span>
+                            SamudraDrishti <span className="text-xs bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded border border-teal-500/30">SIH 2026</span>
                         </h1>
-                        <p className="text-xs text-slate-400">GIS & PFZ Intensity Visualization Engine (Member 3)</p>
+                        <p className="text-xs text-slate-400">GIS, GeoJSON & Geofencing Engine (Member 3 - Days 2-4 Completed)</p>
                     </div>
                 </div>
 
-                {/* API STATUS & LOCATION BADGE */}
                 <div className="flex items-center gap-3 text-xs font-mono">
                     <span className={`px-3 py-1.5 rounded-xl border flex items-center gap-1.5 ${
                         isApiLive ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300' : 'bg-amber-950/60 border-amber-500/40 text-amber-300'
                     }`}>
                         <span className={`w-2 h-2 rounded-full ${isApiLive ? 'bg-emerald-400 animate-ping' : 'bg-amber-400'}`}></span>
-                        {isApiLive ? 'LIVE BACKEND CONNECTED' : 'OFFLINE GIS MODE'}
+                        {isApiLive ? 'LIVE BACKEND API' : 'OFFLINE GIS MODE'}
                     </span>
 
-                    <div className="bg-slate-800/80 px-3 py-1.5 rounded-xl border border-slate-700 text-teal-400 font-bold">
-                        📍 Lat {userLocation.lat}°N, Lon {userLocation.lon}°E
-                    </div>
+                    <button
+                        onClick={handleRunTests}
+                        className="bg-purple-900/60 hover:bg-purple-800 text-purple-200 px-3 py-1.5 rounded-xl border border-purple-500/40 cursor-pointer font-sans transition-all flex items-center gap-1.5"
+                    >
+                        🧪 Run 5 Must-Pass Tests
+                    </button>
                 </div>
             </header>
 
-            {/* ERROR BANNER IF API FAILED */}
+            {/* ERROR BANNER */}
             {error && (
                 <div className="bg-amber-900/40 border-b border-amber-500/30 px-6 py-2 flex items-center justify-between text-xs text-amber-200">
-                    <div className="flex items-center gap-2">
-                        <span>⚠️ {error}</span>
-                    </div>
-                    <button
-                        onClick={() => fetchPFZData(activeCategory)}
-                        className="bg-amber-800/60 hover:bg-amber-700 text-amber-100 px-2.5 py-1 rounded border border-amber-600/50 cursor-pointer transition-all"
-                    >
-                        🔄 Retry API Connect
+                    <span>⚠️ {error}</span>
+                    <button onClick={() => fetchPFZData(activeCategory)} className="bg-amber-800/60 hover:bg-amber-700 text-amber-100 px-2 py-0.5 rounded cursor-pointer">
+                        🔄 Retry API
                     </button>
                 </div>
             )}
 
-            {/* MAIN CONTENT AREA */}
+            {/* MAIN LAYOUT */}
             <main className="flex-1 p-6 grid grid-cols-1 lg:grid-cols-4 gap-6 max-w-7xl mx-auto w-full">
                 {/* LEFT CONTROL PANEL */}
-                <div className="lg:col-span-1 flex flex-col gap-5">
-                    {/* CATEGORY FILTER BUTTONS */}
+                <div className="lg:col-span-1 flex flex-col gap-4">
+                    {/* GEOFENCE ALERT BANNER IF BREACHED */}
+                    <GeofenceAlert geofenceStatus={activeGeofenceAlert} />
+
+                    {/* LAYER TOGGLE CONTROLS */}
                     <div className="bg-slate-900/80 rounded-2xl p-4 border border-slate-800 shadow-lg">
                         <h3 className="font-bold text-xs uppercase tracking-wider text-slate-400 mb-3">
-                            Filter PFZ Categories
+                            🗺️ Map GeoJSON Layer Controls
                         </h3>
-                        <div className="grid grid-cols-2 gap-2 text-xs">
-                            {[
-                                { id: "ALL", label: "All Zones" },
-                                { id: "VERY_HIGH", label: "🔥 Very High" },
-                                { id: "HIGH", label: "🟧 High" },
-                                { id: "MODERATE", label: "🟡 Moderate" },
-                                { id: "LOW", label: "🟢 Low" }
-                            ].map(cat => (
-                                <button
-                                    key={cat.id}
-                                    onClick={() => handleCategoryChange(cat.id)}
-                                    className={`py-2 px-2.5 rounded-xl border transition-all cursor-pointer text-center font-medium ${
-                                        activeCategory === cat.id
-                                            ? 'bg-teal-600 border-teal-400 text-white shadow-md'
-                                            : 'bg-slate-800/60 border-slate-800 text-slate-300 hover:bg-slate-800'
-                                    }`}
-                                >
-                                    {cat.label}
-                                </button>
-                            ))}
+                        <div className="space-y-2 text-xs">
+                            <label className="flex items-center justify-between p-2 rounded-xl bg-slate-800/50 hover:bg-slate-800 cursor-pointer border border-slate-700/60">
+                                <span className="flex items-center gap-2">🛡️ Restricted Geofences</span>
+                                <input type="checkbox" checked={showGeofences} onChange={(e) => setShowGeofences(e.target.checked)} className="accent-teal-500" />
+                            </label>
+                            <label className="flex items-center justify-between p-2 rounded-xl bg-slate-800/50 hover:bg-slate-800 cursor-pointer border border-slate-700/60">
+                                <span className="flex items-center gap-2">🧭 Vessel Route Polyline</span>
+                                <input type="checkbox" checked={showRoute} onChange={(e) => setShowRoute(e.target.checked)} className="accent-teal-500" />
+                            </label>
+                            <label className="flex items-center justify-between p-2 rounded-xl bg-slate-800/50 hover:bg-slate-800 cursor-pointer border border-slate-700/60">
+                                <span className="flex items-center gap-2">📊 Risk-Grid (Member 4)</span>
+                                <input type="checkbox" checked={showRiskGrid} onChange={(e) => setShowRiskGrid(e.target.checked)} className="accent-teal-500" />
+                            </label>
+                        </div>
+
+                        <div className="mt-3 pt-3 border-t border-slate-800">
+                            <button
+                                onClick={() => setSimulateHazardRoute(!simulateHazardRoute)}
+                                className={`w-full py-2 px-3 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 ${
+                                    simulateHazardRoute
+                                        ? 'bg-rose-900/80 border-rose-500 text-rose-200'
+                                        : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'
+                                }`}
+                            >
+                                ⚡ {simulateHazardRoute ? 'Reset Safe Route' : 'Simulate Restricted Hazard Route'}
+                            </button>
                         </div>
                     </div>
 
-                    {/* PFZ INFO SUMMARY CARD */}
+                    {/* MUST-PASS TEST RESULTS OVERLAY */}
+                    {testResults && (
+                        <div className="bg-slate-900/90 rounded-2xl p-4 border border-purple-500/40 shadow-xl">
+                            <div className="flex items-center justify-between mb-2">
+                                <h4 className="font-bold text-xs text-purple-300">🧪 MUST-PASS TEST RESULTS</h4>
+                                <button onClick={() => setTestResults(null)} className="text-xs text-slate-400 hover:text-white">❌</button>
+                            </div>
+                            <div className="space-y-1.5 text-[11px]">
+                                {testResults.map(t => (
+                                    <div key={t.id} className={`p-1.5 rounded border ${t.passed ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-300' : 'bg-rose-950/40 border-rose-500/30 text-rose-300'}`}>
+                                        <div className="font-bold">{t.passed ? '✅' : '❌'} {t.name}</div>
+                                        <div className="text-[10px] text-slate-400">{t.detail}</div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* PFZ STATS CARD */}
                     <PFZInfoCard
-                        nearestPfz={displayPfz}
+                        nearestPfz={targetPfz}
                         userLocation={userLocation}
-                        onResetLocation={handleResetLocation}
+                        onResetLocation={() => { setUserLocation({ lat: 16.98, lon: 82.24 }); setSimulateHazardRoute(false); }}
                     />
-
-                    {/* ACTIVE PFZ ZONES LIST */}
-                    <div className="bg-slate-900/80 rounded-2xl p-4 border border-slate-800 shadow-lg flex-1">
-                        <div className="flex items-center justify-between mb-3">
-                            <h3 className="font-bold text-sm text-slate-200">
-                                🟢 Visible PFZ Hotspots
-                            </h3>
-                            <span className="text-xs text-slate-400 font-mono">
-                                {loading ? 'Loading...' : `${nearestData.allSorted?.length || 0} active`}
-                            </span>
-                        </div>
-
-                        {loading ? (
-                            <div className="py-8 text-center text-xs text-slate-400 animate-pulse">
-                                🌊 Fetching satellite ocean data...
-                            </div>
-                        ) : (
-                            <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
-                                {nearestData.allSorted?.map((pfz, idx) => {
-                                    const isSelected = selectedPfz?.id === pfz.id || (!selectedPfz && idx === 0);
-                                    return (
-                                        <div
-                                            key={pfz.id}
-                                            onClick={() => setSelectedPfz(pfz)}
-                                            className={`p-3 rounded-xl border transition-all text-xs cursor-pointer flex justify-between items-center ${
-                                                isSelected
-                                                    ? 'bg-teal-950/60 border-teal-500 text-teal-200 font-semibold shadow-md'
-                                                    : 'bg-slate-800/40 border-slate-800 text-slate-300 hover:border-slate-700'
-                                            }`}
-                                        >
-                                            <div>
-                                                <div className="font-bold flex items-center gap-1">
-                                                    <span>{pfz.name || pfz.id}</span>
-                                                    {idx === 0 && <span className="text-[10px] bg-teal-500/30 text-teal-300 px-1.5 py-0.5 rounded">NEAREST</span>}
-                                                </div>
-                                                <div className="text-[11px] text-slate-400">
-                                                    SST: {pfz.sst}°C | Chl: {pfz.chlorophyll} | Depth: {pfz.depth || 35}m
-                                                </div>
-                                            </div>
-                                            <div className="text-right font-mono">
-                                                <div className="text-teal-400 font-bold">{pfz.distanceKm} km</div>
-                                                <div className="text-[10px] text-amber-400">{pfz.direction}</div>
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        )}
-                    </div>
                 </div>
 
-                {/* RIGHT MAIN MAP CANVAS */}
-                <div className="lg:col-span-3 min-h-[550px] relative">
+                {/* RIGHT MAP CANVAS */}
+                <div className="lg:col-span-3 min-h-[550px]">
                     <MarineMap
                         userLocation={userLocation}
                         pfzList={nearestData.allSorted || []}
                         nearestPfz={nearestData.nearest}
                         activeCategory={activeCategory}
-                        onSelectCategory={handleCategoryChange}
+                        onSelectCategory={setActiveCategory}
                         onSelectPfz={(pfz) => setSelectedPfz(pfz)}
+                        routeObj={routeObj}
+                        riskGridGeoJSON={riskGridGeoJSON}
+                        showRiskGrid={showRiskGrid}
+                        showGeofences={showGeofences}
+                        showRoute={showRoute}
                     />
                 </div>
             </main>
