@@ -6,6 +6,8 @@ const { getMarineConditions } = require("./marineDataService");
 const { getCycloneStatus } = require("./cycloneService");
 const { planMarineRoute } = require("./marineRouteService");
 const { createGeographicRiskGrid } = require("./geographicRiskGrid");
+const { checkGeofence } = require("./geofenceService");
+
 async function findBestFishingRoute({
   latitude,
   longitude,
@@ -14,7 +16,32 @@ async function findBestFishingRoute({
   hazardCells = [],
   restrictedCells = [],
 }) {
-  // 1. Find the best fishing zone
+  // 0. Check whether the fisherman's current location
+  // is inside an actual restricted geofence.
+  const geofence = checkGeofence(latitude, longitude);
+
+  if (!geofence.success) {
+    return {
+      success: false,
+      message: geofence.message,
+    };
+  }
+
+  // Never allow route planning from inside a restricted zone.
+  if (
+    geofence.status === "RESTRICTED" ||
+    geofence.insideRestrictedZone === true
+  ) {
+    return {
+      success: false,
+      message:
+        "Route planning blocked: current location is inside a restricted zone.",
+      safetyStatus: "DO_NOT_SAIL",
+      geofence,
+    };
+  }
+
+  // 1. Find the best fishing zone.
   const pfzResult = getBestFishingZones({
     latitude,
     longitude,
@@ -24,37 +51,35 @@ async function findBestFishingRoute({
     return {
       success: false,
       message: pfzResult.message,
+      geofence,
     };
   }
 
   const destination = pfzResult.recommendedZone;
 
-  // 2. Get live marine conditions
+  // 2. Get live marine conditions.
   const marineData = await getMarineConditions(latitude, longitude);
 
-  // 3. Get live weather conditions
+  // 3. Get live weather conditions.
   const weatherData = await getWeatherConditions(latitude, longitude);
 
-  // 4. Get official IMD marine warnings
+  // 4. Get official IMD marine warnings.
   const marineWarnings = await getMarineWarnings(latitude, longitude);
 
+  // 5. Get cyclone status.
   const cycloneStatus = await getCycloneStatus(latitude, longitude);
 
-  // 5. Combine live data for the existing risk engine
+  // 6. Combine live data for the existing risk engine.
   const marineConditions = {
     wind: weatherData.windSpeed ?? 0,
     waveHeight: marineData.waveHeight ?? 0,
     rainProbability: weatherData.precipitationProbability ?? 0,
-
     lightning: marineWarnings.lightningWarning ? 1 : 0,
-
     cyclone: cycloneStatus?.active ?? null,
-
     currentSpeed: marineData.currentSpeed ?? 0,
   };
 
-  // 6. Determine final safety status
-  //
+  // 7. Determine final safety status.
   // Official IMD warnings take priority over
   // normal AI risk recommendations.
   let finalSafetyStatus = "SAFE";
@@ -65,11 +90,8 @@ async function findBestFishingRoute({
     finalSafetyStatus = "CAUTION";
   }
 
-  // 7. Convert geographic start/destination
+  // 8. Convert geographic start/destination
   // into prototype grid positions.
-  //
-  // This will be replaced by a true geographic
-  // risk grid in the next phase.
   const start = {
     row: 0,
     col: 0,
@@ -80,8 +102,7 @@ async function findBestFishingRoute({
     col: cols - 1,
   };
 
-  // 8. Generate risk-aware route
-  // 8. Create geographic risk grid
+  // 9. Create geographic risk grid.
   const geographicRiskGrid = createGeographicRiskGrid({
     rows,
     cols,
@@ -97,7 +118,7 @@ async function findBestFishingRoute({
     hazardCells,
   });
 
-  // 9. Generate risk-aware route using the geographic risk grid
+  // 10. Generate risk-aware route.
   const routeResult = planMarineRoute({
     rows,
     cols,
@@ -109,7 +130,7 @@ async function findBestFishingRoute({
     customRiskGrid: geographicRiskGrid.grid,
   });
 
-  // 10. Geographic route
+  // 11. Convert grid route into geographic coordinates.
   const geographicRoute = routeResult.success
     ? createGeographicRoute({
         route: routeResult.route,
@@ -124,9 +145,7 @@ async function findBestFishingRoute({
       })
     : [];
 
-  // 9. Convert grid route into geographic coordinates
-
-  // 10. Final response
+  // 12. Final response.
   return {
     success: routeResult.success,
 
@@ -134,6 +153,9 @@ async function findBestFishingRoute({
       latitude,
       longitude,
     },
+
+    // Geofence information.
+    geofence,
 
     recommendedFishingZone: {
       id: destination.id,
@@ -145,30 +167,33 @@ async function findBestFishingRoute({
       distance: destination.distance,
     },
 
-    // LIVE marine data
+    // LIVE marine data.
     liveMarineData: marineData,
 
-    // LIVE weather data
+    // LIVE weather data.
     liveWeatherData: weatherData,
 
-    // OFFICIAL IMD warning
+    // OFFICIAL IMD warning.
     marineWarning: marineWarnings,
 
+    // Cyclone status.
     cyclone: cycloneStatus,
 
-    // Final safety decision
+    // Final safety decision.
     safetyStatus: finalSafetyStatus,
+
+    // Geographic risk grid.
     geographicRiskGrid: geographicRiskGrid.grid,
 
     geographicRiskCoordinates: geographicRiskGrid.coordinates,
 
-    // A* route
+    // A* route.
     route: routeResult.route || [],
 
-    // Geographic route
+    // Geographic route.
     geographicRoute,
 
-    // Route metrics
+    // Route metrics.
     distance: routeResult.distance ?? null,
 
     risk: routeResult.risk || geographicRiskGrid.risk,
@@ -177,26 +202,38 @@ async function findBestFishingRoute({
 
     totalCost: routeResult.totalCost ?? null,
 
-    explanation: routeResult.explanation || routeResult.message,
+    explanation:
+      finalSafetyStatus === "DO_NOT_SAIL"
+        ? `Route calculated for visualization only. DO NOT SAIL: Official IMD ${marineWarnings.level} warning is active.`
+        : finalSafetyStatus === "CAUTION"
+          ? `Route optimized with marine risk awareness. CAUTION: Official IMD ${marineWarnings.level} warning is active.`
+          : routeResult.explanation || routeResult.message,
 
     avoidedHazards: routeResult.avoidedHazards || [],
 
     restrictedCells,
 
-    // Data provenance
+    // Data provenance.
     dataQuality: {
       marineData: "LIVE",
       weatherData: "LIVE",
       wind: "LIVE",
       rainProbability: "LIVE",
 
-      // Lightning is now obtained from IMD
+      // Lightning is obtained from IMD.
       lightning: "LIVE_IMD",
 
-      // Cyclone integration is still pending
+      // Structured cyclone track integration is
+      // not available yet.
       cyclone: cycloneStatus?.status ?? "NOT_AVAILABLE",
 
       marineWarning: "LIVE_IMD",
+
+      // Current geofence dataset is prototype data.
+      geofence:
+        geofence?.source === "Prototype Geofence Dataset"
+          ? "PROTOTYPE"
+          : "UNKNOWN",
     },
   };
 }

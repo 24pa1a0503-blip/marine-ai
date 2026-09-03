@@ -11,24 +11,62 @@ dotenv.config();
  * optimistic recommendation.
  */
 function applySafetyOverride(recommendation, toolResults = {}) {
+  // Unified marine analysis result
+  const marine = toolResults.analyzeMarine?.data;
+
+  // Individual tool results — kept for backward compatibility
   const warnings = toolResults.getWarnings?.data;
   const risk = toolResults.calculateRisk?.data?.risk;
+  const geofence = toolResults.checkGeofence?.data;
 
-  // IMD warning takes highest priority.
-  if (
-    warnings?.level === "HIGH" ||
-    (warnings?.warning === true && warnings?.level === "HIGH")
-  ) {
+  // ==================================================
+  // HIGHEST PRIORITY: UNIFIED MARINE SAFETY DECISION
+  // ==================================================
+
+  if (marine?.safety?.status === "DO_NOT_SAIL") {
     return "DO_NOT_SAIL";
   }
 
-  // Strong environmental risk also blocks a safe recommendation.
+  if (marine?.safety?.riskLevel === "EXTREME") {
+    return "DO_NOT_SAIL";
+  }
+
+  if (marine?.safety?.riskLevel === "HIGH") {
+    return "PROCEED_WITH_CAUTION";
+  }
+
+  // Restricted geofence must never allow safe sailing
+  if (marine?.geofence?.insideRestrictedZone === true) {
+    return "DO_NOT_SAIL";
+  }
+
+  // Unified warning
+  if (marine?.warning?.level === "HIGH") {
+    return "DO_NOT_SAIL";
+  }
+
+  // ==================================================
+  // INDIVIDUAL TOOL FALLBACK
+  // ==================================================
+
+  if (warnings?.level === "HIGH") {
+    return "DO_NOT_SAIL";
+  }
+
+  if (warnings?.warning === true && warnings?.level === "HIGH") {
+    return "DO_NOT_SAIL";
+  }
+
   if (risk?.level === "EXTREME") {
     return "DO_NOT_SAIL";
   }
 
   if (risk?.level === "HIGH") {
     return "PROCEED_WITH_CAUTION";
+  }
+
+  if (geofence?.insideRestrictedZone === true) {
+    return "DO_NOT_SAIL";
   }
 
   return recommendation;
@@ -204,10 +242,21 @@ function fallbackSynthesizeResponse(
   // MARINE SAFETY
   // ==================================================
   else if (intent === "MARINE_SAFETY") {
-    const weather = toolResults.getWeather?.data;
-    const ocean = toolResults.getOceanConditions?.data;
-    const warnings = toolResults.getWarnings?.data;
-    const risk = toolResults.calculateRisk?.data?.risk;
+    const marine = toolResults.analyzeMarine?.data;
+
+    const weather = marine?.weather ?? toolResults.getWeather?.data;
+    const ocean = marine?.ocean ?? toolResults.getOceanConditions?.data;
+    const warnings = marine?.warning ?? toolResults.getWarnings?.data;
+
+    const risk = marine?.safety
+      ? {
+          level: marine.safety.riskLevel,
+          score: marine.safety.riskScore,
+          factors: marine.safety.factors || [],
+        }
+      : toolResults.calculateRisk?.data?.risk;
+
+    const geofence = marine?.geofence ?? toolResults.checkGeofence?.data;
 
     const wind = weather?.windSpeed ?? 0;
     const waves = ocean?.waveHeight ?? 0;

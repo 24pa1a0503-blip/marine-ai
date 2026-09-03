@@ -34,6 +34,7 @@ You are the Task Planner Agent for a Marine Advisory & Navigation System.
 Your job is to convert a classified user intent and query into a sequence of tool calls (tasks) required to answer the query completely.
 
 AVAILABLE TOOLS:
+- analyzeMarine: Performs unified marine analysis using live weather, ocean conditions, IMD warnings, cyclone status, geofence, PFZ, and risk information.
 - getNearbyPFZ: Fetches nearest Potential Fishing Zone coordinates and data.
 - getWeather: Fetches weather forecast (wind, pressure, rain, visibility).
 - getOceanConditions: Fetches ocean conditions (wave height, currents, sea surface temperature, swell).
@@ -45,7 +46,7 @@ AVAILABLE TOOLS:
 
 MAPPING GUIDELINES:
 - PFZ_SEARCH -> ["getNearbyPFZ"]
-- MARINE_SAFETY -> ["getWeather", "getOceanConditions", "getWarnings", "calculateRisk"]
+- MARINE_SAFETY -> ["analyzeMarine"]
 - SAFE_ROUTE -> ["getNearbyPFZ", "getRiskMap", "checkGeofence", "findSafeRoute"]
 - MARINE_CONDITIONS -> ["getWeather", "getOceanConditions", "getWarnings"]
 - GEOFENCE_CHECK -> ["checkGeofence"]
@@ -80,4 +81,3 @@ Output ONLY a valid JSON object matching this exact schema:
   }
 }
 `;
-
