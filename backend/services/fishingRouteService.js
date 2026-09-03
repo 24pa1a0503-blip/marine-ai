@@ -3,6 +3,7 @@ const { getMarineWarnings } = require("./marineWarningService");
 const { getBestFishingZones } = require("./pfzRecommendationService");
 const { getWeatherConditions } = require("./weatherService");
 const { getMarineConditions } = require("./marineDataService");
+const { getCycloneStatus } = require("./cycloneService");
 const { planMarineRoute } = require("./marineRouteService");
 const { createGeographicRiskGrid } = require("./geographicRiskGrid");
 async function findBestFishingRoute({
@@ -37,6 +38,8 @@ async function findBestFishingRoute({
   // 4. Get official IMD marine warnings
   const marineWarnings = await getMarineWarnings(latitude, longitude);
 
+  const cycloneStatus = await getCycloneStatus(latitude, longitude);
+
   // 5. Combine live data for the existing risk engine
   const marineConditions = {
     wind: weatherData.windSpeed ?? 0,
@@ -45,7 +48,7 @@ async function findBestFishingRoute({
 
     lightning: marineWarnings.lightningWarning ? 1 : 0,
 
-    cyclone: null,
+    cyclone: cycloneStatus?.active ?? null,
 
     currentSpeed: marineData.currentSpeed ?? 0,
   };
@@ -151,6 +154,8 @@ async function findBestFishingRoute({
     // OFFICIAL IMD warning
     marineWarning: marineWarnings,
 
+    cyclone: cycloneStatus,
+
     // Final safety decision
     safetyStatus: finalSafetyStatus,
     geographicRiskGrid: geographicRiskGrid.grid,
@@ -189,7 +194,7 @@ async function findBestFishingRoute({
       lightning: "LIVE_IMD",
 
       // Cyclone integration is still pending
-      cyclone: "NOT_AVAILABLE",
+      cyclone: cycloneStatus?.status ?? "NOT_AVAILABLE",
 
       marineWarning: "LIVE_IMD",
     },
