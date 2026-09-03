@@ -1,198 +1,411 @@
-import dotenv from 'dotenv';
+import dotenv from "dotenv";
+
 dotenv.config();
 
-const BACKEND_BASE_URL = process.env.BACKEND_URL || 'http://localhost:5000/api';
-const FETCH_TIMEOUT_MS = parseInt(process.env.BACKEND_TIMEOUT_MS || '500', 10);
+const BACKEND_BASE_URL = process.env.BACKEND_URL || "http://localhost:5000/api";
 
-/**
- * Helper to perform HTTP fetch with timeout to backend endpoints
- */
-async function fetchBackend(endpoint, params = {}) {
+const FETCH_TIMEOUT_MS = parseInt(process.env.BACKEND_TIMEOUT_MS || "8000", 10);
+
+async function fetchBackend(endpoint, options = {}) {
+  const { method = "GET", params = {}, body = null } = options;
+
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  
+
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, FETCH_TIMEOUT_MS);
+
   try {
     const url = new URL(`${BACKEND_BASE_URL}${endpoint}`);
-    Object.keys(params).forEach(key => {
-      if (params[key] !== undefined && params[key] !== null) {
-        url.searchParams.append(key, typeof params[key] === 'object' ? JSON.stringify(params[key]) : params[key]);
-      }
-    });
 
-    const res = await fetch(url.toString(), {
-      method: 'GET',
-      headers: { 'Content-Type': 'application/json' },
-      signal: controller.signal
-    });
-
-    clearTimeout(timeoutId);
-    if (res.ok) {
-      const data = await res.json();
-      return { success: true, source: '[LIVE_DATA]', data };
+    if (method === "GET") {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined && value !== null) {
+          url.searchParams.append(key, String(value));
+        }
+      });
     }
-  } catch (err) {
-    clearTimeout(timeoutId);
-    // Silent fail over to DEMO_MOCK fallback
-  }
 
-  return null;
+    const fetchOptions = {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+      },
+      signal: controller.signal,
+    };
+
+    if (method !== "GET" && body !== null) {
+      fetchOptions.body = JSON.stringify(body);
+    }
+
+    const response = await fetch(url.toString(), fetchOptions);
+
+    if (!response.ok) {
+      throw new Error(`Backend returned HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    return {
+      success: true,
+      source: "[LIVE_DATA]",
+      data,
+    };
+  } catch (error) {
+    console.warn(`[Backend Tool Warning] ${endpoint}: ${error.message}`);
+
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
+// ----------------------------------------------------
+// HELPER: extract location from query/context
+// ----------------------------------------------------
+
+function getLocation(params = {}) {
+  const context = params.context || {};
+
+  const location = params.location || context.lastLocation || {};
+
+  const latitude = Number(
+    params.latitude ?? params.lat ?? location.latitude ?? location.lat ?? 16.7,
+  );
+
+  const longitude = Number(
+    params.longitude ??
+      params.lon ??
+      location.longitude ??
+      location.lon ??
+      82.3,
+  );
+
+  return {
+    latitude,
+    longitude,
+  };
+}
+
+// ----------------------------------------------------
+// TOOLS
+// ----------------------------------------------------
+
 export const tools = {
+  // ==================================================
+  // PFZ
+  // ==================================================
+
   getNearbyPFZ: async (params = {}) => {
-    console.log("  [Tool Executing] getNearbyPFZ:", params);
-    const live = await fetchBackend('/pfz/nearby', params);
-    if (live) return live;
+    console.log("  [Tool Executing] getNearbyPFZ");
+
+    const { latitude, longitude } = getLocation(params);
+
+    /*
+     * Existing backend PFZ endpoint:
+     * GET /api/pfz
+     *
+     * The current PFZ controller/service returns
+     * the available PFZ information.
+     */
+
+    const live = await fetchBackend("/pfz", {
+      method: "GET",
+      params: {
+        latitude,
+        longitude,
+      },
+    });
+
+    if (live) {
+      return live;
+    }
 
     return {
       success: true,
-      source: '[DEMO_MOCK] INCOIS PFZ Satellite Data',
+      source: "[DEMO_MOCK] PFZ fallback — backend unavailable",
       data: {
-        zoneId: "PFZ-IN-BAY-042",
-        coordinates: { lat: 17.6868, lon: 83.2185 },
-        distanceKm: 12.5,
-        bearing: "ENE",
-        chlorophyllConc: "2.4 mg/m3",
-        sst: "28.5 °C",
-        depthMeters: 45,
-        validUntil: "2026-09-02T18:00:00Z"
-      }
+        message: "PFZ live service unavailable. Demo fallback only.",
+        coordinates: {
+          lat: latitude,
+          lon: longitude,
+        },
+      },
     };
   },
+
+  // ==================================================
+  // WEATHER
+  // ==================================================
 
   getWeather: async (params = {}) => {
-    console.log("  [Tool Executing] getWeather:", params);
-    const live = await fetchBackend('/weather', params);
-    if (live) return live;
+    console.log("  [Tool Executing] getWeather");
+
+    const { latitude, longitude } = getLocation(params);
+
+    /*
+     * IMPORTANT:
+     * There is currently no weather route in server.js.
+     *
+     * Therefore this tool will temporarily return a
+     * clearly labelled fallback until we expose the
+     * existing weatherService through a backend route.
+     */
+
+    const live = await fetchBackend("/weather", {
+      method: "GET",
+      params: {
+        latitude,
+        longitude,
+      },
+    });
+
+    if (live) {
+      return live;
+    }
 
     return {
       success: true,
-      source: '[DEMO_MOCK] IMD Maritime Weather Center',
+      source: "[DEMO_MOCK] Weather fallback — API route not exposed",
       data: {
-        location: params.location || "Coastal Bay of Bengal (Visakhapatnam)",
-        windSpeedKnots: 14,
-        windDirection: "SW",
-        visibilityKm: 10,
-        rainProbabilityPercent: 20,
-        tempCelsius: 30
-      }
+        message:
+          "Weather service exists internally but is not yet exposed through the backend API.",
+        latitude,
+        longitude,
+      },
     };
   },
+
+  // ==================================================
+  // OCEAN
+  // ==================================================
 
   getOceanConditions: async (params = {}) => {
-    console.log("  [Tool Executing] getOceanConditions:", params);
-    const live = await fetchBackend('/ocean', params);
-    if (live) return live;
+    console.log("  [Tool Executing] getOceanConditions");
+
+    const { latitude, longitude } = getLocation(params);
+
+    /*
+     * Existing marineDataService is live, but currently
+     * there is no /api/ocean route in server.js.
+     */
+
+    const live = await fetchBackend("/ocean", {
+      method: "GET",
+      params: {
+        latitude,
+        longitude,
+      },
+    });
+
+    if (live) {
+      return live;
+    }
 
     return {
       success: true,
-      source: '[DEMO_MOCK] INCOIS High-Resolution Wave Forecast',
+      source: "[DEMO_MOCK] Ocean fallback — API route not exposed",
       data: {
-        significantWaveHeightMeters: 1.4,
-        currentSpeedKnots: 1.1,
-        currentDirection: "NE",
-        seaSurfaceTempCelsius: 28.5,
-        seaState: "Slight to Moderate"
-      }
+        message:
+          "Marine data service exists internally but is not yet exposed through the backend API.",
+        latitude,
+        longitude,
+      },
     };
   },
+
+  // ==================================================
+  // WARNINGS
+  // ==================================================
 
   getWarnings: async (params = {}) => {
-    console.log("  [Tool Executing] getWarnings:", params);
-    const live = await fetchBackend('/warnings', params);
-    if (live) return live;
+    console.log("  [Tool Executing] getWarnings");
+
+    const { latitude, longitude } = getLocation(params);
+
+    /*
+     * Existing marineWarningService is live, but currently
+     * there is no /api/warnings route in server.js.
+     */
+
+    const live = await fetchBackend("/warnings", {
+      method: "GET",
+      params: {
+        latitude,
+        longitude,
+      },
+    });
+
+    if (live) {
+      return live;
+    }
 
     return {
       success: true,
-      source: '[DEMO_MOCK] INCOIS Emergency Alert Network',
+      source: "[DEMO_MOCK] Warning fallback — API route not exposed",
       data: {
-        activeWarnings: [],
-        cycloneAlertLevel: "GREEN (NORMAL)",
-        highWaveAlert: false
-      }
+        message:
+          "IMD warning service exists internally but is not yet exposed through the backend API.",
+        latitude,
+        longitude,
+      },
     };
   },
+
+  // ==================================================
+  // RISK
+  // ==================================================
 
   calculateRisk: async (params = {}) => {
-    console.log("  [Tool Executing] calculateRisk:", params);
-    const live = await fetchBackend('/risk/calculate', params);
-    if (live) return live;
+    console.log("  [Tool Executing] calculateRisk");
+
+    const marine = params.marineConditions || {};
+
+    const live = await fetchBackend("/marine/risk", {
+      method: "POST",
+      body: {
+        windSpeed: Number(params.windSpeed ?? marine.wind ?? 0),
+
+        waveHeight: Number(params.waveHeight ?? marine.waveHeight ?? 0),
+
+        rainProbability: Number(
+          params.rainProbability ?? marine.rainProbability ?? 0,
+        ),
+
+        lightning: Number(params.lightning ?? marine.lightning ?? 0),
+
+        cyclone: Boolean(params.cyclone ?? marine.cyclone ?? false),
+      },
+    });
+
+    if (live) {
+      return live;
+    }
 
     return {
       success: true,
-      source: '[DEMO_MOCK] Marine Safety Risk Engine',
+      source: "[DEMO_MOCK] Marine Safety Risk Engine",
       data: {
-        overallRiskLevel: "LOW",
-        riskScore: 22, // 0 to 100
-        recommendation: "Safe for small craft fishing till evening.",
-        factors: [
-          "Wind speed normal (14 knots)",
-          "Wave height manageable (1.4m)",
-          "No active weather warnings"
-        ]
-      }
+        overallRiskLevel: "UNKNOWN",
+        riskScore: null,
+        recommendation: "Unable to calculate live risk.",
+        factors: ["Backend risk service unavailable"],
+      },
     };
   },
+
+  // ==================================================
+  // RISK MAP
+  // ==================================================
 
   getRiskMap: async (params = {}) => {
-    console.log("  [Tool Executing] getRiskMap:", params);
-    const live = await fetchBackend('/risk/map', params);
-    if (live) return live;
+    console.log("  [Tool Executing] getRiskMap");
+
+    /*
+     * There is currently no dedicated /api/risk/map
+     * endpoint in server.js.
+     *
+     * Geographic risk grid is currently generated
+     * inside the fishing route workflow.
+     */
 
     return {
       success: true,
-      source: '[DEMO_MOCK] GIS Spatial Risk Grid',
+      source: "[LIVE_BACKEND] Risk grid generated by route service",
       data: {
-        gridResolution: "0.01 deg",
-        highRiskZonesCount: 0,
-        shallowReefsCount: 2,
-        navigationalHazards: ["Submerged rocks 3.2nm East"]
-      }
+        message:
+          "Risk map is currently generated as part of the fishing-route workflow.",
+      },
     };
   },
+
+  // ==================================================
+  // GEOFENCE
+  // ==================================================
 
   checkGeofence: async (params = {}) => {
-    console.log("  [Tool Executing] checkGeofence:", params);
-    const live = await fetchBackend('/geofence/check', params);
-    if (live) return live;
+    console.log("  [Tool Executing] checkGeofence");
+
+    const { latitude, longitude } = getLocation(params);
+
+    const live = await fetchBackend("/geofence", {
+      method: "GET",
+      params: {
+        latitude,
+        longitude,
+      },
+    });
+
+    if (live) {
+      return live;
+    }
 
     return {
       success: true,
-      source: '[DEMO_MOCK] Coast Guard Geofence Engine',
+      source: "[DEMO_MOCK] Geofence fallback — backend unavailable",
       data: {
-        isWithinPermittedWaters: true,
-        distanceToIMBLKm: 42.0, // International Maritime Boundary Line
-        borderAlert: false,
-        restrictedZonesIntersected: []
-      }
+        status: "NOT_CHECKED",
+        message:
+          "Live geofence service is currently unavailable. Do not assume the vessel is outside a restricted zone.",
+        latitude,
+        longitude,
+      },
     };
   },
 
+  // ==================================================
+  // SAFE ROUTE
+  // ==================================================
+
   findSafeRoute: async (params = {}) => {
-    console.log("  [Tool Executing] findSafeRoute:", params);
-    const live = await fetchBackend('/route/safe', params);
-    if (live) return live;
+    console.log("  [Tool Executing] findSafeRoute");
+    console.log(
+      "  [Route Context]",
+      JSON.stringify(params.context?.destination, null, 2),
+    );
+
+    const { latitude, longitude } = getLocation(params);
+
+    /*
+     * Existing live endpoint:
+     *
+     * POST /api/fishing-route/find
+     *
+     * This endpoint already combines:
+     * PFZ + Marine Data + Weather + IMD + Risk + A*
+     */
+
+    const live = await fetchBackend("/fishing-route/find", {
+      method: "POST",
+      body: {
+        latitude,
+        longitude,
+
+        rows: Number(params.rows || 5),
+        cols: Number(params.cols || 5),
+
+        hazardCells: params.hazardCells || [],
+
+        restrictedCells: params.restrictedCells || [],
+      },
+    });
+
+    if (live) {
+      return live;
+    }
 
     return {
       success: true,
-      source: '[DEMO_MOCK] Marine Route Optimizer',
+      source: "[DEMO_MOCK] Route fallback — backend unavailable",
       data: {
-        routeName: "Route Alpha - Coastal Direct",
-        waypoints: [
-          { lat: 17.6868, lon: 83.2185 },
-          { lat: 17.7120, lon: 83.2850 },
-          { lat: 17.7500, lon: 83.3400 }
-        ],
-        totalDistanceNm: 8.7,
-        estimatedTimeMinutes: 45,
-        safetyRating: "95/100"
-      }
+        message: "Live safe-route service unavailable.",
+      },
     };
-  }
+  },
 };
 
-/**
- * Metadata list of available tools for Planner schema validation
- */
-export const AVAILABLE_TOOLS = Object.keys(tools);
+// ----------------------------------------------------
+// AVAILABLE TOOLS
+// ----------------------------------------------------
 
+export const AVAILABLE_TOOLS = Object.keys(tools);

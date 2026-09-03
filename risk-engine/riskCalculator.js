@@ -4,6 +4,17 @@ function calculateRisk(data) {
   let score = 0;
   const factors = [];
 
+  // Official warning severity is treated as a high-priority
+  // safety factor, but the final safety override remains
+  // responsible for the actual sailing recommendation.
+  if (data.officialWarning === "HIGH") {
+    score += 60;
+    factors.push("Official high marine warning");
+  } else if (data.officialWarning === "MODERATE") {
+    score += 30;
+    factors.push("Official marine warning");
+  }
+
   // Wind
   if (data.wind > THRESHOLDS.wind.high) {
     score += 40;
