@@ -153,7 +153,9 @@ function checkGeofence(latitude, longitude) {
 
     status,
 
-    insideRestrictedZone: zonesInside.length > 0,
+    insideRestrictedZone: zonesInside.some(
+      (zone) => zone.type === "RESTRICTED",
+    ),
 
     zonesInside,
 
