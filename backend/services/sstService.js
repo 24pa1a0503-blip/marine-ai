@@ -1,12 +1,7 @@
 const https = require("https");
 
-const agent = new https.Agent({
-  rejectUnauthorized: false,
-});
-
-// INCOIS ERDDAP dataset
-const ERDDAP_BASE =
-  "https://erddap.incois.gov.in/erddap/griddap/incois_tmi_3day_datasets";
+const OPEN_METEO_MARINE_URL =
+  "https://marine-api.open-meteo.com/v1/marine";
 
 function fetchJSON(url) {
   return new Promise((resolve, reject) => {
@@ -14,7 +9,6 @@ function fetchJSON(url) {
       .get(
         url,
         {
-          agent,
           headers: {
             "User-Agent": "Marine-AI-Prototype/1.0",
           },
@@ -30,7 +24,7 @@ function fetchJSON(url) {
             if (response.statusCode !== 200) {
               return reject(
                 new Error(
-                  `ERDDAP returned status ${response.statusCode}: ${data}`,
+                  `Open-Meteo returned status ${response.statusCode}: ${data}`,
                 ),
               );
             }
@@ -40,7 +34,7 @@ function fetchJSON(url) {
             } catch (error) {
               reject(
                 new Error(
-                  `Failed to parse ERDDAP response: ${error.message}`,
+                  `Failed to parse Open-Meteo response: ${error.message}`,
                 ),
               );
             }
@@ -52,70 +46,44 @@ function fetchJSON(url) {
 }
 
 async function getSST(lat, lon) {
-  const latitude = Math.round(Number(lat) * 4) / 4;
-  const longitude = Math.round(Number(lon) * 4) / 4;
+  const latitude = Number(lat);
+  const longitude = Number(lon);
 
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+  if (
+    !Number.isFinite(latitude) ||
+    !Number.isFinite(longitude) ||
+    latitude < -90 ||
+    latitude > 90 ||
+    longitude < -180 ||
+    longitude > 180
+  ) {
     throw new Error("Invalid latitude or longitude");
   }
 
-  /*
-   * The TMI dataset contains:
-   * - SST
-   * - Wind speed
-   * - Rain rate
-   *
-   * We request the latest available record by first
-   * requesting the dataset metadata.
-   */
+  const params = new URLSearchParams({
+    latitude: String(latitude),
+    longitude: String(longitude),
+    current: "sea_surface_temperature",
+    cell_selection: "sea",
+    timezone: "GMT",
+  });
 
-  const metadataUrl =
-    `${ERDDAP_BASE}.json`;
+  const url = `${OPEN_METEO_MARINE_URL}?${params.toString()}`;
 
-  const metadata = await fetchJSON(metadataUrl);
-
-  const timeValues =
-    metadata.table?.rows || [];
-
-  if (timeValues.length === 0) {
-    throw new Error("No TMI data available from INCOIS ERDDAP");
-  }
-
-  /*
-   * The metadata endpoint is not guaranteed to expose
-   * the latest data value directly, so for the first
-   * live-data test we use the most recent timestamp
-   * exposed by the dataset response.
-   */
-
-  const latestTime =
-    timeValues[timeValues.length - 1]?.[0];
-
-  if (!latestTime) {
-    throw new Error("Unable to determine latest SST timestamp");
-  }
-
-  const query =
-    `SST[(\"${latestTime}\")][(${latitude})][(${longitude})]`;
-
-  const url =
-    `${ERDDAP_BASE}.json?${encodeURIComponent(query)}`;
-
-  console.log("Requesting current SST from INCOIS:");
+  console.log("Requesting current SST from Open-Meteo:");
   console.log(url);
 
   const result = await fetchJSON(url);
 
-  const row =
-    result.table?.rows?.[0];
+  const sst = result.current?.sea_surface_temperature ?? null;
+  const timestamp = result.current?.time ?? null;
 
   return {
-    latitude,
-    longitude,
-    sst: row?.[3] ?? null,
-    timestamp: latestTime,
-    source: "INCOIS ERDDAP",
-    dataset: "incois_tmi_3day_datasets",
+    latitude: result.latitude ?? latitude,
+    longitude: result.longitude ?? longitude,
+    sst,
+    timestamp,
+    source: "Open-Meteo Marine API",
   };
 }
 

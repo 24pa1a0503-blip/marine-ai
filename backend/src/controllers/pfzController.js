@@ -1,10 +1,19 @@
-const { getPFZs } = require("../../services/pfzService");
+const {
+  getPFZs,
+  getPFZSourceStatus,
+} = require("../../services/pfzService");
 
-function getPFZ(req, res) {
+async function getPFZ(req, res) {
   try {
     const category = req.query.category || "ALL";
 
-    const validCategories = ["ALL", "VERY_HIGH", "HIGH", "MODERATE", "LOW"];
+    const validCategories = [
+      "ALL",
+      "VERY_HIGH",
+      "HIGH",
+      "MODERATE",
+      "LOW",
+    ];
 
     const normalizedCategory = category.toUpperCase();
 
@@ -16,13 +25,18 @@ function getPFZ(req, res) {
       });
     }
 
-    const pfzs = getPFZs(normalizedCategory);
+    const pfzs = await getPFZs(normalizedCategory);
+    const sourceStatus = await getPFZSourceStatus();
 
     res.json({
       success: true,
       count: pfzs.length,
       category: normalizedCategory,
-      source: "Prototype PFZ Dataset",
+
+      source: sourceStatus.source,
+      status: sourceStatus.status,
+      updatedAt: sourceStatus.updatedAt,
+
       pfzs,
     });
   } catch (error) {

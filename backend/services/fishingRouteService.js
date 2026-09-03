@@ -42,9 +42,9 @@ async function findBestFishingRoute({
   }
 
   // 1. Find the best fishing zone.
-  const pfzResult = getBestFishingZones({
-    latitude,
-    longitude,
+  const pfzResult = await getBestFishingZones({
+  latitude,
+  longitude,
   });
 
   if (!pfzResult.success) {
