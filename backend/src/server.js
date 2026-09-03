@@ -4,6 +4,7 @@ require("dotenv").config();
 
 const riskRoutes = require("./routes/riskRoutes");
 const routeRoutes = require("../routes/routeRoutes");
+const sstRoutes = require("../routes/sstRoutes");
 
 const app = express();
 
@@ -28,6 +29,12 @@ app.get("/api/health", (req, res) => {
 // ========================================
 
 app.use("/api/marine", riskRoutes);
+
+// ========================================
+// SST API
+// ========================================
+
+app.use("/api/marine/sst", sstRoutes);
 
 // ========================================
 // ROUTE OPTIMIZATION API
