@@ -247,14 +247,14 @@ function optimizeRoute(
       if (marineRisk) {
         if (avoidedHazards.length > 0) {
           explanation =
-            `Route selected to reduce exposure to ${marineRisk.level.toLowerCase()} marine conditions. ` +
-            `${avoidedHazards.length} hazardous or restricted cells were avoided.`;
+            `Route optimized using marine risk and travel distance. ` +
+            `${avoidedHazards.length} hazardous or restricted cells were avoided. ` +
+            `Official warnings should be considered before departure.`;
         } else {
-          explanation = `Route selected based on ${marineRisk.level.toLowerCase()} marine conditions while minimizing travel distance.`;
+          explanation =
+            `Route optimized using marine risk while minimizing travel distance. ` +
+            `Official warnings should be considered before departure.`;
         }
-      } else {
-        explanation =
-          "Route selected by balancing travel distance and marine risk.";
       }
 
       // ========================================

@@ -10,21 +10,36 @@
 export class ContextManager {
   constructor(initialState = {}) {
     this.state = {
-      lastLocation: initialState.lastLocation || { name: "Visakhapatnam Coast", lat: 17.6868, lon: 83.2185 },
+      lastLocation: initialState.lastLocation || {
+        name: "Visakhapatnam Coast",
+        lat: 17.6868,
+        lon: 83.2185,
+      },
       destination: initialState.destination || null,
       selectedPFZ: initialState.selectedPFZ || null,
-      previousRiskResult: initialState.previousRiskResult || null
+      previousRiskResult: initialState.previousRiskResult || null,
     };
   }
 
   updateFromQueryAndIntent(intentResult, toolResults = {}) {
     if (toolResults.getNearbyPFZ?.data) {
-      this.state.selectedPFZ = toolResults.getNearbyPFZ.data;
-      if (toolResults.getNearbyPFZ.data.coordinates) {
+      const pfzData = toolResults.getNearbyPFZ.data;
+
+      this.state.selectedPFZ = pfzData;
+
+      // Backend /api/pfz returns a list of PFZs.
+      // Select the strongest available PFZ for route planning.
+      if (Array.isArray(pfzData.pfzs) && pfzData.pfzs.length > 0) {
+        const bestPFZ = [...pfzData.pfzs].sort(
+          (a, b) => (b.pfz_score ?? 0) - (a.pfz_score ?? 0),
+        )[0];
+
+        this.state.selectedPFZ = bestPFZ;
+
         this.state.destination = {
-          name: toolResults.getNearbyPFZ.data.zoneId,
-          lat: toolResults.getNearbyPFZ.data.coordinates.lat,
-          lon: toolResults.getNearbyPFZ.data.coordinates.lon
+          name: bestPFZ.name,
+          lat: Number(bestPFZ.latitude),
+          lon: Number(bestPFZ.longitude),
         };
       }
     }
