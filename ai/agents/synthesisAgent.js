@@ -7,8 +7,14 @@ dotenv.config();
 /**
  * Marine Safety Override
  *
- * Official warning information must override an AI-generated
- * optimistic recommendation.
+ * Deterministic safety logic always has priority over
+ * an AI-generated optimistic recommendation.
+ *
+ * Priority:
+ * 1. DO_NOT_SAIL hazards / conditions
+ * 2. HIGH / EXTREME risk
+ * 3. CAUTION hazards / MODERATE-HIGH risk
+ * 4. SAFE_TO_SAIL only when no safety hazard requires caution
  */
 function applySafetyOverride(recommendation, toolResults = {}) {
   // Unified marine analysis result
@@ -33,20 +39,30 @@ function applySafetyOverride(recommendation, toolResults = {}) {
 
   const geofence = marine?.geofence ?? toolResults.checkGeofence?.data;
 
+  // Alerts and hazards from the unified Marine Analyze API
+  const hazards = marine?.alerts?.hazards || [];
+
   // ==================================================
-  // HIGHEST PRIORITY: UNIFIED MARINE SAFETY DECISION
+  // HIGHEST PRIORITY: DO NOT SAIL
   // ==================================================
 
+  // Backend safety decision
   if (marine?.safety?.status === "DO_NOT_SAIL") {
     return "DO_NOT_SAIL";
   }
 
-  if (marine?.safety?.riskLevel === "EXTREME") {
+  // Any detected hazard explicitly requiring DO_NOT_SAIL
+  if (
+    hazards.some(
+      (hazard) => hazard.recommendation === "DO_NOT_SAIL"
+    )
+  ) {
     return "DO_NOT_SAIL";
   }
 
-  if (marine?.safety?.riskLevel === "HIGH") {
-    return "PROCEED_WITH_CAUTION";
+  // Extreme risk
+  if (marine?.safety?.riskLevel === "EXTREME") {
+    return "DO_NOT_SAIL";
   }
 
   // Restricted geofence must never allow safe sailing
@@ -54,20 +70,20 @@ function applySafetyOverride(recommendation, toolResults = {}) {
     return "DO_NOT_SAIL";
   }
 
-  // Unified warning
+  // High IMD warning
   if (marine?.warning?.level === "HIGH") {
     return "DO_NOT_SAIL";
   }
 
-  // ==================================================
-  // INDIVIDUAL TOOL FALLBACK
-  // ==================================================
-
+  // Individual tool fallback
   if (warnings?.level === "HIGH") {
     return "DO_NOT_SAIL";
   }
 
-  if (warnings?.warning === true && warnings?.level === "HIGH") {
+  if (
+    warnings?.warning === true &&
+    warnings?.level === "HIGH"
+  ) {
     return "DO_NOT_SAIL";
   }
 
@@ -75,13 +91,40 @@ function applySafetyOverride(recommendation, toolResults = {}) {
     return "DO_NOT_SAIL";
   }
 
+  // ==================================================
+  // SECOND PRIORITY: CAUTION
+  // ==================================================
+
+  // Unified marine risk
+  if (marine?.safety?.riskLevel === "HIGH") {
+    return "PROCEED_WITH_CAUTION";
+  }
+
+  if (marine?.safety?.riskLevel === "MODERATE") {
+    return "PROCEED_WITH_CAUTION";
+  }
+
+  // Any detected hazard requiring caution
+  if (
+    hazards.some(
+      (hazard) => hazard.recommendation === "CAUTION"
+    )
+  ) {
+    return "PROCEED_WITH_CAUTION";
+  }
+
+  // Individual risk tool fallback
   if (risk?.level === "HIGH") {
     return "PROCEED_WITH_CAUTION";
   }
 
-  if (geofence?.insideRestrictedZone === true) {
-    return "DO_NOT_SAIL";
+  if (risk?.level === "MODERATE") {
+    return "PROCEED_WITH_CAUTION";
   }
+
+  // ==================================================
+  // NO SAFETY OVERRIDE REQUIRED
+  // ==================================================
 
   return recommendation;
 }
@@ -99,12 +142,19 @@ export async function synthesizeResponse(
   const apiKey = process.env.GEMINI_API_KEY;
   const lang = intentResult.language || "en";
 
-  if (apiKey && apiKey.trim() !== "" && apiKey !== "your_gemini_api_key_here") {
+  if (
+    apiKey &&
+    apiKey.trim() !== "" &&
+    apiKey !== "your_gemini_api_key_here"
+  ) {
     try {
       const genAI = new GoogleGenerativeAI(apiKey);
 
       const model = genAI.getGenerativeModel({
-        model: process.env.MODEL_NAME || "gemini-2.5-flash",
+        model:
+          process.env.MODEL_NAME ||
+          "gemini-2.5-flash",
+
         generationConfig: {
           responseMimeType: "application/json",
         },
@@ -115,6 +165,8 @@ export async function synthesizeResponse(
 IMPORTANT SAFETY RULE:
 Official IMD warnings have priority over general environmental conditions.
 Never state that it is safe to sail if the IMD warning level is HIGH.
+Never ignore a detected DO_NOT_SAIL hazard.
+If a detected hazard has recommendation CAUTION, do not return SAFE_TO_SAIL.
 Never invent cyclone status, geofence status, distances, route names, or measurements.
 
 PFZ RESPONSE RULES:
@@ -137,13 +189,19 @@ Tool Execution Results: ${JSON.stringify(toolResults)}`;
       const text = response.response.text();
       const parsed = JSON.parse(text);
 
-      if (parsed && parsed.answer && parsed.recommendation && parsed.evidence) {
+      if (
+        parsed &&
+        parsed.answer &&
+        parsed.recommendation &&
+        parsed.evidence
+      ) {
         // Apply deterministic safety override AFTER LLM generation.
         parsed.recommendation = applySafetyOverride(
           parsed.recommendation,
           toolResults,
         );
 
+        // Prevent contradictory natural-language answers.
         parsed.answer = enforceSafetyAnswer(
           parsed.answer,
           parsed.recommendation,
@@ -174,23 +232,86 @@ Tool Execution Results: ${JSON.stringify(toolResults)}`;
  * Prevent contradictory natural-language answers after
  * the safety override has been applied.
  */
-function enforceSafetyAnswer(answer, recommendation, toolResults, lang) {
-  const warnings =
-    toolResults.getWarnings?.data || toolResults.analyzeMarine?.data?.warning;
+function enforceSafetyAnswer(
+  answer,
+  recommendation,
+  toolResults,
+  lang,
+) {
+  const marine = toolResults.analyzeMarine?.data;
 
-  if (recommendation === "DO_NOT_SAIL" && warnings?.level === "HIGH") {
-    const warningText =
-      warnings.factors?.join(", ") || "high-risk marine conditions";
+  const warnings =
+    marine?.warning ??
+    toolResults.getWarnings?.data;
+
+  const hazards =
+    marine?.alerts?.hazards || [];
+
+  // ==================================================
+  // DO NOT SAIL
+  // ==================================================
+
+  if (recommendation === "DO_NOT_SAIL") {
+    const doNotSailHazards = hazards
+      .filter(
+        (hazard) =>
+          hazard.recommendation ===
+          "DO_NOT_SAIL"
+      )
+      .map(
+        (hazard) =>
+          hazard.title
+      );
+
+    const hazardText =
+      doNotSailHazards.length > 0
+        ? doNotSailHazards.join(", ")
+        : "high-risk marine conditions";
 
     if (lang === "te") {
-      return `${answer}
-
-⚠️ భద్రతా హెచ్చరిక: IMD నుండి HIGH స్థాయి సముద్ర హెచ్చరిక ఉంది. ప్రస్తుతం సముద్రంలోకి వెళ్లడం సురక్షితం కాదు. హెచ్చరికలు: ${warningText}.`;
+      return `ప్రస్తుతం సముద్రంలోకి వేటకు వెళ్లడం సురక్షితం కాదు. ${
+        warnings?.level === "HIGH"
+          ? "IMD నుండి HIGH స్థాయి సముద్ర హెచ్చరిక ఉంది."
+          : ""
+      } గుర్తించిన ప్రమాదాలు: ${hazardText}.`;
     }
 
-    return `${answer}
+    return `Do not venture into the sea at this time. ${
+      warnings?.level === "HIGH"
+        ? "IMD has issued a HIGH marine warning for the reported area. "
+        : ""
+    }Detected hazards: ${hazardText}.`;
+  }
 
-⚠️ Safety warning: IMD has issued a HIGH marine warning for the reported area. Do not venture into the sea at this time. Active warnings include: ${warningText}.`;
+  // ==================================================
+  // CAUTION
+  // ==================================================
+
+  if (
+    recommendation ===
+    "PROCEED_WITH_CAUTION"
+  ) {
+    const cautionHazards = hazards
+      .filter(
+        (hazard) =>
+          hazard.recommendation ===
+          "CAUTION"
+      )
+      .map(
+        (hazard) =>
+          hazard.title
+      );
+
+    const hazardText =
+      cautionHazards.length > 0
+        ? cautionHazards.join(", ")
+        : "elevated marine conditions";
+
+    if (lang === "te") {
+      return `సముద్ర పరిస్థితుల్లో జాగ్రత్త అవసరం. గుర్తించిన పరిస్థితులు: ${hazardText}. సముద్రంలోకి వెళ్లే ముందు తాజా వాతావరణం మరియు అధికారిక హెచ్చరికలను పరిశీలించండి.`;
+    }
+
+    return `Proceed only with caution. Detected conditions include: ${hazardText}. Check the latest weather and official marine warnings before entering the sea.`;
   }
 
   return answer;
@@ -208,13 +329,16 @@ function fallbackSynthesizeResponse(
 ) {
   const intent = intentResult.intent;
   const lang = intentResult.language || "en";
-  const timestamp = new Date().toISOString();
+  const timestamp =
+    new Date().toISOString();
 
   const sources = new Set();
   const parametersUsed = [];
   const riskFactors = [];
 
-  Object.entries(toolResults || {}).forEach(([toolName, res]) => {
+  Object.entries(
+    toolResults || {},
+  ).forEach(([toolName, res]) => {
     if (res?.source) {
       sources.add(res.source);
     }
@@ -483,12 +607,18 @@ function fallbackSynthesizeResponse(
   // ==================================================
   // MARINE SAFETY
   // ==================================================
-  else if (intent === "MARINE_SAFETY") {
-    const marine = toolResults.analyzeMarine?.data;
 
     const weather =
       marine?.weather ??
       toolResults.getWeatherForecast?.data ??
+  else if (
+    intent === "MARINE_SAFETY"
+  ) {
+    const marine =
+      toolResults.analyzeMarine?.data;
+
+    const weather =
+      marine?.weather ??
       toolResults.getWeather?.data;
 
     const ocean =
@@ -500,17 +630,34 @@ function fallbackSynthesizeResponse(
 
     const risk = marine?.safety
       ? {
-          level: marine.safety.riskLevel,
-          score: marine.safety.riskScore,
-          factors: marine.safety.factors || [],
+          level:
+            marine.safety.riskLevel,
+          score:
+            marine.safety.riskScore,
+          factors:
+            marine.safety.factors ||
+            [],
         }
-      : toolResults.calculateRisk?.data?.risk;
+      : toolResults.calculateRisk
+          ?.data?.risk;
 
-    const geofence = marine?.geofence ?? toolResults.checkGeofence?.data;
+    const geofence =
+      marine?.geofence ??
+      toolResults.checkGeofence?.data;
 
-    const wind = weather?.windSpeed ?? 0;
-    const waves = ocean?.waveHeight ?? 0;
-    const rain = weather?.precipitationProbability ?? 0;
+    const hazards =
+      marine?.alerts?.hazards ||
+      [];
+
+    const wind =
+      weather?.windSpeed ?? 0;
+
+    const waves =
+      ocean?.waveHeight ?? 0;
+
+    const rain =
+      weather?.precipitationProbability ??
+      0;
 
     parametersUsed.push(
       `Wind Speed: ${weather?.windSpeed ?? "N/A"} km/h`,
@@ -532,24 +679,26 @@ function fallbackSynthesizeResponse(
     parametersUsed.push("Final Safety Decision: DO_NOT_SAIL");
 
     if (warnings?.factors?.length) {
-      riskFactors.push(...warnings.factors);
+      riskFactors.push(
+        ...warnings.factors,
+      );
     }
 
     if (risk?.factors?.length) {
-      riskFactors.push(...risk.factors);
+      riskFactors.push(
+        ...risk.factors,
+      );
     }
 
-    // IMPORTANT: IMD warning first.
-    if (warnings?.level === "HIGH") {
-      recommendation = "DO_NOT_SAIL";
-    } else if (risk?.level === "EXTREME") {
-      recommendation = "DO_NOT_SAIL";
-    } else if (risk?.level === "HIGH") {
-      recommendation = "PROCEED_WITH_CAUTION";
-    } else if (risk?.level === "MODERATE") {
-      recommendation = "PROCEED_WITH_CAUTION";
-    } else {
-      recommendation = "SAFE_TO_SAIL";
+    // Add detected hazard information
+    if (hazards.length > 0) {
+      hazards.forEach((hazard) => {
+        if (hazard.evidence?.length) {
+          riskFactors.push(
+            ...hazard.evidence,
+          );
+        }
+      });
     }
 
     const isForecast =
@@ -604,9 +753,16 @@ function fallbackSynthesizeResponse(
   // ==================================================
   // SAFE ROUTE
   // ==================================================
-  else if (intent === "SAFE_ROUTE") {
-    const route = toolResults.findSafeRoute?.data;
-    const warnings = route?.marineWarning;
+
+  else if (
+    intent === "SAFE_ROUTE"
+  ) {
+    const route =
+      toolResults.findSafeRoute?.data;
+
+    const warnings =
+      route?.marineWarning;
+
     const risk = route?.risk;
 
     parametersUsed.push(
@@ -616,30 +772,44 @@ function fallbackSynthesizeResponse(
       "Hazard Avoidance",
     );
 
-    recommendation = "NAVIGATION_ADVISORY";
+    recommendation =
+      "NAVIGATION_ADVISORY";
 
-    if (warnings?.level === "HIGH") {
-      recommendation = "DO_NOT_SAIL";
+    if (
+      warnings?.level === "HIGH"
+    ) {
+      recommendation =
+        "DO_NOT_SAIL";
     }
 
     if (risk?.factors) {
-      riskFactors.push(...risk.factors);
+      riskFactors.push(
+        ...risk.factors,
+      );
     }
 
-    if (route?.avoidedHazards?.length) {
-      riskFactors.push(`Avoided hazards: ${route.avoidedHazards.length}`);
+    if (
+      route?.avoidedHazards?.length
+    ) {
+      riskFactors.push(
+        `Avoided hazards: ${route.avoidedHazards.length}`,
+      );
     }
 
-    const distance = route?.distance ?? "unavailable";
+    const distance =
+      route?.distance ??
+      "unavailable";
 
     if (lang === "te") {
       answerText =
-        recommendation === "DO_NOT_SAIL"
+        recommendation ===
+        "DO_NOT_SAIL"
           ? `IMD నుండి HIGH స్థాయి హెచ్చరిక ఉన్నందున మార్గం లెక్కించినప్పటికీ ప్రస్తుతం సముద్రంలోకి వెళ్లడం సిఫార్సు చేయబడదు. లెక్కించిన మార్గ దూరం ${distance}.`
           : `ప్రమాద కణాలను తప్పించుకునే సురక్షిత మార్గం లెక్కించబడింది. మార్గ దూరం ${distance}.`;
     } else {
       answerText =
-        recommendation === "DO_NOT_SAIL"
+        recommendation ===
+        "DO_NOT_SAIL"
           ? `A route was calculated, but an IMD HIGH warning is active. Do not venture into the sea at this time. Calculated route distance: ${distance}.`
           : `A risk-aware route was calculated while avoiding restricted and high-risk cells. Calculated route distance: ${distance}.`;
     }
@@ -648,17 +818,22 @@ function fallbackSynthesizeResponse(
   // ==================================================
   // MARINE CONDITIONS
   // ==================================================
-  else if (intent === "MARINE_CONDITIONS") {
+
+  else if (
+    intent ===
+    "MARINE_CONDITIONS"
+  ) {
     const weather =
-      toolResults.getWeatherForecast?.data || toolResults.getWeather?.data;
+      toolResults.getWeather?.data;
 
     const ocean =
-      toolResults.getMarineForecast?.data ||
       toolResults.getOceanConditions?.data;
 
-    const warnings = toolResults.getWarnings?.data;
+    const warnings =
+      toolResults.getWarnings?.data;
 
-    recommendation = "INFORMATIONAL";
+    recommendation =
+      "INFORMATIONAL";
 
     parametersUsed.push(
       "Wind Speed",
@@ -667,8 +842,12 @@ function fallbackSynthesizeResponse(
       "Wave Period",
     );
 
-    if (warnings?.level === "HIGH") {
-      riskFactors.push(...(warnings.factors || []));
+    if (
+      warnings?.level === "HIGH"
+    ) {
+      riskFactors.push(
+        ...(warnings.factors || []),
+      );
     }
 
     if (lang === "te") {
@@ -681,9 +860,32 @@ function fallbackSynthesizeResponse(
   // ==================================================
   // HAZARD ALERT
   // ==================================================
-  else if (intent === "HAZARD_ALERT") {
-    const warnings = toolResults.getWarnings?.data;
-    const risk = toolResults.calculateRisk?.data?.risk;
+
+  else if (
+    intent === "HAZARD_ALERT"
+  ) {
+    const marine =
+      toolResults.analyzeMarine?.data;
+
+    const warnings =
+      marine?.warning ??
+      toolResults.getWarnings?.data;
+
+    const risk =
+      marine?.safety
+        ? {
+            level:
+              marine.safety.riskLevel,
+            factors:
+              marine.safety.factors ||
+              [],
+          }
+        : toolResults.calculateRisk
+            ?.data?.risk;
+
+    const hazards =
+      marine?.alerts?.hazards ||
+      [];
 
     parametersUsed.push(
       "IMD Warning",
@@ -693,22 +895,63 @@ function fallbackSynthesizeResponse(
       "Squall Warning",
     );
 
-    if (warnings?.level === "HIGH") {
-      recommendation = "DO_NOT_SAIL";
-      riskFactors.push(...(warnings.factors || []));
-    } else if (risk?.level === "HIGH" || risk?.level === "EXTREME") {
-      recommendation = "DO_NOT_SAIL";
-      riskFactors.push(...(risk.factors || []));
+    if (
+      warnings?.level === "HIGH"
+    ) {
+      recommendation =
+        "DO_NOT_SAIL";
+
+      riskFactors.push(
+        ...(warnings.factors || []),
+      );
+    } else if (
+      hazards.some(
+        (hazard) =>
+          hazard.recommendation ===
+          "DO_NOT_SAIL",
+      )
+    ) {
+      recommendation =
+        "DO_NOT_SAIL";
+    } else if (
+      risk?.level === "HIGH" ||
+      risk?.level === "EXTREME"
+    ) {
+      recommendation =
+        "DO_NOT_SAIL";
+
+      riskFactors.push(
+        ...(risk.factors || []),
+      );
+    } else if (
+      hazards.some(
+        (hazard) =>
+          hazard.recommendation ===
+          "CAUTION",
+      ) ||
+      risk?.level === "MODERATE"
+    ) {
+      recommendation =
+        "PROCEED_WITH_CAUTION";
     } else {
-      recommendation = "INFORMATIONAL";
+      recommendation =
+        "INFORMATIONAL";
     }
 
     if (lang === "te") {
       answerText = `ప్రమాద హెచ్చరిక స్థాయి: ${
-        warnings?.level || "UNKNOWN"
-      }. ${warnings?.warning ? "IMD హెచ్చరికలు సక్రియంగా ఉన్నాయి." : "ప్రస్తుతం గుర్తించిన IMD హెచ్చరిక లేదు."}`;
+        warnings?.level ||
+        "UNKNOWN"
+      }. ${
+        warnings?.warning
+          ? "IMD హెచ్చరికలు సక్రియంగా ఉన్నాయి."
+          : "ప్రస్తుతం గుర్తించిన IMD హెచ్చరిక లేదు."
+      }`;
     } else {
-      answerText = `Marine hazard status: ${warnings?.level || "UNKNOWN"}. ${
+      answerText = `Marine hazard status: ${
+        warnings?.level ||
+        "UNKNOWN"
+      }. ${
         warnings?.warning
           ? "Active IMD warnings are present."
           : "No active IMD warning was detected by the current parser."
@@ -719,8 +962,13 @@ function fallbackSynthesizeResponse(
   // ==================================================
   // GEOFENCE
   // ==================================================
-  else if (intent === "GEOFENCE_CHECK") {
-    const geofence = toolResults.checkGeofence?.data;
+
+  else if (
+    intent ===
+    "GEOFENCE_CHECK"
+  ) {
+    const geofence =
+      toolResults.checkGeofence?.data;
 
     parametersUsed.push(
       "IMBL Proximity",
@@ -730,57 +978,86 @@ function fallbackSynthesizeResponse(
     );
 
     // Geofence service unavailable
-    if (!geofence || geofence.status === "NOT_CHECKED") {
-      recommendation = "NAVIGATION_ADVISORY";
+    if (
+      !geofence ||
+      geofence.status ===
+        "NOT_CHECKED"
+    ) {
+      recommendation =
+        "NAVIGATION_ADVISORY";
 
       answerText =
         lang === "te"
           ? "జియోఫెన్స్ తనిఖీ ప్రస్తుతం అందుబాటులో లేదు. కాబట్టి ప్రదేశం సురక్షితం అని నిర్ధారించలేము."
           : "The geofence check is currently unavailable. The vessel location cannot be confirmed as outside restricted or protected zones.";
 
-      riskFactors.push("Geofence status unavailable");
+      riskFactors.push(
+        "Geofence status unavailable",
+      );
     }
 
     // Vessel is inside one or more zones
     else if (
-      geofence.insideRestrictedZone === true &&
-      geofence.zonesInside?.length > 0
+      geofence.insideRestrictedZone ===
+        true &&
+      geofence.zonesInside?.length >
+        0
     ) {
-      const zones = geofence.zonesInside;
+      const zones =
+        geofence.zonesInside;
 
       const zoneNames = zones
-        .map((zone) => `${zone.name} (${zone.severity})`)
+        .map(
+          (zone) =>
+            `${zone.name} (${zone.severity})`,
+        )
         .join(", ");
 
-      const hasCriticalZone = zones.some(
-        (zone) => zone.severity === "CRITICAL",
-      );
+      const hasCriticalZone =
+        zones.some(
+          (zone) =>
+            zone.severity ===
+            "CRITICAL",
+        );
 
-      recommendation = hasCriticalZone ? "DO_NOT_ENTER" : "NAVIGATION_ADVISORY";
+      recommendation =
+        hasCriticalZone
+          ? "DO_NOT_ENTER"
+          : "NAVIGATION_ADVISORY";
 
       riskFactors.push(
         ...zones.map(
-          (zone) => `Inside ${zone.type}: ${zone.name} (${zone.severity})`,
+          (zone) =>
+            `Inside ${zone.type}: ${zone.name} (${zone.severity})`,
         ),
       );
 
       if (lang === "te") {
-        answerText = hasCriticalZone
-          ? `⚠️ జియోఫెన్స్ హెచ్చరిక: ప్రస్తుత స్థానం ${zoneNames} ప్రాంతంలో ఉంది. ఇది పరిమిత ప్రాంతం. అనుమతి లేకుండా ఈ ప్రాంతంలోకి ప్రవేశించవద్దు.`
-          : `⚠️ జియోఫెన్స్ హెచ్చరిక: ప్రస్తుత స్థానం ${zoneNames} ప్రాంతంలో ఉంది. ఇది రక్షిత లేదా పరిమిత ప్రాంతం. అనుమతి లేకుండా ఇక్కడ కార్యకలాపాలు నిర్వహించవద్దు.`;
+        answerText =
+          hasCriticalZone
+            ? `⚠️ జియోఫెన్స్ హెచ్చరిక: ప్రస్తుత స్థానం ${zoneNames} ప్రాంతంలో ఉంది. ఇది పరిమిత ప్రాంతం. అనుమతి లేకుండా ఈ ప్రాంతంలోకి ప్రవేశించవద్దు.`
+            : `⚠️ జియోఫెన్స్ హెచ్చరిక: ప్రస్తుత స్థానం ${zoneNames} ప్రాంతంలో ఉంది. ఇది రక్షిత లేదా పరిమిత ప్రాంతం. అనుమతి లేకుండా ఇక్కడ కార్యకలాపాలు నిర్వహించవద్దు.`;
       } else {
-        answerText = hasCriticalZone
-          ? `⚠️ Geofence alert: the current vessel location is inside ${zoneNames}. This is a restricted area. Do not enter without appropriate authorization.`
-          : `⚠️ Geofence alert: the current vessel location is inside ${zoneNames}. This is a protected or restricted area. Avoid operating in this zone unless legally authorized.`;
+        answerText =
+          hasCriticalZone
+            ? `⚠️ Geofence alert: the current vessel location is inside ${zoneNames}. This is a restricted area. Do not enter without appropriate authorization.`
+            : `⚠️ Geofence alert: the current vessel location is inside ${zoneNames}. This is a protected or restricted area. Avoid operating in this zone unless legally authorized.`;
       }
     }
 
     // Vessel is outside zones but close to one
-    else if (geofence.nearestZone) {
-      const nearest = geofence.nearestZone;
+    else if (
+      geofence.nearestZone
+    ) {
+      const nearest =
+        geofence.nearestZone;
 
-      if (geofence.status === "CAUTION") {
-        recommendation = "NAVIGATION_ADVISORY";
+      if (
+        geofence.status ===
+        "CAUTION"
+      ) {
+        recommendation =
+          "NAVIGATION_ADVISORY";
 
         riskFactors.push(
           `Near ${nearest.name}`,
@@ -789,33 +1066,29 @@ function fallbackSynthesizeResponse(
 
         if (lang === "te") {
           answerText =
-            `⚠️ జాగ్రత్త: సమీప జియోఫెన్స్ ప్రాంతం ${nearest.name}. ` +
-            `దూరం సుమారు ${nearest.distanceKm} కి.మీ. ` +
-            `ఈ ప్రాంతానికి దగ్గరగా ప్రయాణించేటప్పుడు జాగ్రత్త వహించండి.`;
+            `⚠️ జాగ్రత్త: సమీప జియోఫెన్స్ ప్రాంతం ${nearest.name}. దూరం సుమారు ${nearest.distanceKm} కి.మీ. ఈ ప్రాంతానికి దగ్గరగా ప్రయాణించేటప్పుడు జాగ్రత్త వహించండి.`;
         } else {
           answerText =
-            `⚠️ Geofence caution: the nearest monitored zone is ${nearest.name}, ` +
-            `approximately ${nearest.distanceKm} km away. ` +
-            `Maintain caution while operating near this zone.`;
+            `⚠️ Geofence caution: the nearest monitored zone is ${nearest.name}, approximately ${nearest.distanceKm} km away. Maintain caution while operating near this zone.`;
         }
       } else {
-        recommendation = "INFORMATIONAL";
+        recommendation =
+          "INFORMATIONAL";
 
         if (lang === "te") {
           answerText =
-            `జియోఫెన్స్ స్థితి CLEAR. సమీపంలోని పర్యవేక్షించబడిన ప్రాంతం ` +
-            `${nearest.name}, దూరం సుమారు ${nearest.distanceKm} కి.మీ.`;
+            `జియోఫెన్స్ స్థితి CLEAR. సమీపంలోని పర్యవేక్షించబడిన ప్రాంతం ${nearest.name}, దూరం సుమారు ${nearest.distanceKm} కి.మీ.`;
         } else {
           answerText =
-            `Geofence status is CLEAR. The nearest monitored zone is ` +
-            `${nearest.name}, approximately ${nearest.distanceKm} km away.`;
+            `Geofence status is CLEAR. The nearest monitored zone is ${nearest.name}, approximately ${nearest.distanceKm} km away.`;
         }
       }
     }
 
     // No monitored zone information
     else {
-      recommendation = "INFORMATIONAL";
+      recommendation =
+        "INFORMATIONAL";
 
       if (lang === "te") {
         answerText =
@@ -830,9 +1103,15 @@ function fallbackSynthesizeResponse(
   // ==================================================
   // GENERAL QUERY
   // ==================================================
+
   else {
-    recommendation = "INFORMATIONAL";
-    parametersUsed.push("General Inquiry");
+    recommendation =
+      "INFORMATIONAL";
+
+    parametersUsed.push(
+      "General Inquiry",
+    );
+
     riskFactors.push("None");
 
     answerText =
@@ -841,16 +1120,25 @@ function fallbackSynthesizeResponse(
         : "Hello! I am your Marine Advisory AI. I can help you find Potential Fishing Zones, evaluate sea conditions and safety, generate risk-aware routes, and check marine warnings.";
   }
 
-  // Final deterministic safety override.
-  recommendation = applySafetyOverride(recommendation, toolResults);
+  // ==================================================
+  // FINAL DETERMINISTIC SAFETY OVERRIDE
+  // ==================================================
 
-  // Make sure the answer cannot contradict a HIGH IMD warning.
-  answerText = enforceSafetyAnswer(
-    answerText,
-    recommendation,
-    toolResults,
-    lang,
-  );
+  recommendation =
+    applySafetyOverride(
+      recommendation,
+      toolResults,
+    );
+
+  // Make sure the answer cannot contradict
+  // the final safety recommendation.
+  answerText =
+    enforceSafetyAnswer(
+      answerText,
+      recommendation,
+      toolResults,
+      lang,
+    );
 
   return {
     answer: answerText,

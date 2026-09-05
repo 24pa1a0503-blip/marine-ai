@@ -14,6 +14,13 @@ const { calculateRisk } = require("../../../risk-engine/riskCalculator");
 const { getCycloneStatus } = require("../../services/cycloneService");
 const { buildDataQuality } = require("../../services/dataQualityService");
 
+const { detectHazards } = require("../hazardDetector");
+
+const {
+  evaluateAlerts,
+  getActiveAlerts,
+} = require("../alertEngine");
+
 async function analyzeMarine(req, res) {
   try {
     const latitude = Number(req.body.latitude ?? 16.7);
@@ -63,11 +70,11 @@ async function analyzeMarine(req, res) {
       rainProbability: Number(weather?.precipitationProbability ?? 0),
       lightning: warning?.lightningWarning ? 1 : 0,
       officialWarning: warning?.level ?? null,
-      // Cyclone integration is not available yet.
       cyclone: cyclone?.active ?? null,
     };
 
     const risk = calculateRisk(marineConditions);
+
     const dataQuality = buildDataQuality({
       weather,
       ocean,
@@ -84,9 +91,65 @@ async function analyzeMarine(req, res) {
       geofence?.insideRestrictedZone === true
     ) {
       safetyStatus = "DO_NOT_SAIL";
-    } else if (risk.level === "HIGH" || geofence?.status === "CAUTION") {
+    } else if (
+      risk.level === "HIGH" ||
+      geofence?.status === "CAUTION"
+    ) {
       safetyStatus = "CAUTION";
     }
+
+    // --------------------------------------------------
+    // ALERT ENGINE
+    // --------------------------------------------------
+
+    const alertData = {
+      location: {
+        latitude,
+        longitude,
+      },
+      weather,
+      ocean,
+      warning,
+      cyclone,
+      geofence,
+      safety: {
+        status: safetyStatus,
+        riskLevel: risk.level,
+        riskScore: risk.score,
+        factors: risk.factors,
+      },
+    };
+
+    // Detect hazards from the marine analysis.
+    const hazards = detectHazards(alertData);
+        // Safety override from critical marine hazards.
+    const hasDoNotSailHazard = hazards.some(
+      (hazard) =>
+        hazard.recommendation === "DO_NOT_SAIL"
+    );
+
+    if (hasDoNotSailHazard) {
+      safetyStatus = "DO_NOT_SAIL";
+    }
+    // Create/update/resolve alerts in the central alert engine.
+    const alerts = evaluateAlerts(
+      hazards,
+      {
+        latitude,
+        longitude,
+      },
+      {
+        source: "Marine AI",
+        sourceStatus: "LIVE_ANALYSIS",
+      }
+    );
+
+    // Get the final active alert list.
+    const activeAlerts = getActiveAlerts();
+
+    // --------------------------------------------------
+    // RESPONSE
+    // --------------------------------------------------
 
     res.json({
       success: true,
@@ -97,6 +160,7 @@ async function analyzeMarine(req, res) {
         latitude,
         longitude,
       },
+
       dataQuality,
 
       safety: {
@@ -104,6 +168,14 @@ async function analyzeMarine(req, res) {
         riskLevel: risk.level,
         riskScore: risk.score,
         factors: risk.factors,
+      },
+
+      // Alert intelligence
+      alerts: {
+        hazardCount: hazards.length,
+        alertCount: alerts.length,
+        hazards,
+        active: activeAlerts,
       },
 
       pfz: {
