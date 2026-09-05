@@ -5,6 +5,12 @@ const THRESHOLDS = {
     high: 35,
   },
 
+  windGust: {
+    low: 25,
+    moderate: 35,
+    high: 45,
+  },
+
   waveHeight: {
     low: 1.5,
     moderate: 2.5,

@@ -1,7 +1,7 @@
 const { getPFZs } = require("./pfzService");
 const { calculateDistance } = require("../../gis/distance");
 
-function getBestFishingZones({ latitude, longitude, maxDistance = 150 }) {
+async function getBestFishingZones({ latitude, longitude, maxDistance = 150 }) {
   latitude = Number(latitude);
   longitude = Number(longitude);
 
@@ -12,7 +12,7 @@ function getBestFishingZones({ latitude, longitude, maxDistance = 150 }) {
     };
   }
 
-  const pfzs = getPFZs("ALL");
+  const pfzs = await getPFZs("ALL");
 
   const ranked = pfzs
     .map((pfz) => {

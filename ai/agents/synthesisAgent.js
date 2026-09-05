@@ -14,10 +14,24 @@ function applySafetyOverride(recommendation, toolResults = {}) {
   // Unified marine analysis result
   const marine = toolResults.analyzeMarine?.data;
 
-  // Individual tool results — kept for backward compatibility
-  const warnings = toolResults.getWarnings?.data;
-  const risk = toolResults.calculateRisk?.data?.risk;
-  const geofence = toolResults.checkGeofence?.data;
+  const weather =
+    marine?.weather ??
+    toolResults.getWeatherForecast?.data ??
+    toolResults.getWeather?.data;
+
+  const ocean =
+    marine?.ocean ??
+    toolResults.getMarineForecast?.data ??
+    toolResults.getOceanConditions?.data;
+
+  const warnings = marine?.warning ?? toolResults.getWarnings?.data;
+
+  const risk =
+    marine?.risk ??
+    toolResults.calculateRisk?.data?.risk ??
+    toolResults.calculateRisk?.data;
+
+  const geofence = marine?.geofence ?? toolResults.checkGeofence?.data;
 
   // ==================================================
   // HIGHEST PRIORITY: UNIFIED MARINE SAFETY DECISION
@@ -103,6 +117,15 @@ Official IMD warnings have priority over general environmental conditions.
 Never state that it is safe to sail if the IMD warning level is HIGH.
 Never invent cyclone status, geofence status, distances, route names, or measurements.
 
+PFZ RESPONSE RULES:
+
+- For PFZ_SEARCH queries asking for the nearest PFZ, identify the PFZ with the smallest distanceKm.
+- Never call a PFZ "strongest", "best", or "highest scoring" unless a valid numeric pfz_score is actually available and the user asks for the best/strongest PFZ.
+- Never display null, undefined, NaN, or missing values to the user.
+- If SST, chlorophyll, confidence, or PFZ score is unavailable, say "unavailable" instead.
+- Do not invent missing PFZ measurements.
+- Clearly distinguish LIVE data from unavailable or fallback data.
+
 User Query: "${userQuery}"
 Detected Intent: "${intentResult.intent}"
 Detected Language: "${lang}"
@@ -152,16 +175,22 @@ Tool Execution Results: ${JSON.stringify(toolResults)}`;
  * the safety override has been applied.
  */
 function enforceSafetyAnswer(answer, recommendation, toolResults, lang) {
-  const warnings = toolResults.getWarnings?.data;
+  const warnings =
+    toolResults.getWarnings?.data || toolResults.analyzeMarine?.data?.warning;
 
   if (recommendation === "DO_NOT_SAIL" && warnings?.level === "HIGH") {
+    const warningText =
+      warnings.factors?.join(", ") || "high-risk marine conditions";
+
     if (lang === "te") {
-      return `IMD నుండి HIGH స్థాయి సముద్ర హెచ్చరిక ఉంది. ప్రస్తుతం సముద్రంలోకి వేటకు వెళ్లడం సురక్షితం కాదు. హెచ్చరికలు: ${warnings.factors?.join(", ") || "అధిక ప్రమాద పరిస్థితులు"}.`;
+      return `${answer}
+
+⚠️ భద్రతా హెచ్చరిక: IMD నుండి HIGH స్థాయి సముద్ర హెచ్చరిక ఉంది. ప్రస్తుతం సముద్రంలోకి వెళ్లడం సురక్షితం కాదు. హెచ్చరికలు: ${warningText}.`;
     }
 
-    return `IMD has issued a HIGH marine warning for the reported area. Do not venture into the sea at this time. Active warnings include: ${
-      warnings.factors?.join(", ") || "high-risk marine conditions"
-    }.`;
+    return `${answer}
+
+⚠️ Safety warning: IMD has issued a HIGH marine warning for the reported area. Do not venture into the sea at this time. Active warnings include: ${warningText}.`;
   }
 
   return answer;
@@ -206,35 +235,248 @@ function fallbackSynthesizeResponse(
   // ==================================================
   // PFZ SEARCH
   // ==================================================
-
   if (intent === "PFZ_SEARCH") {
-    const pfzData = toolResults.getNearbyPFZ?.data;
-    const pfzs = pfzData?.pfzs || [];
+    /*
+     * PFZ_SEARCH can use two different tools:
+     *
+     * 1. getNearbyPFZ -> finds the nearest PFZ
+     * 2. rankPFZs -> finds the best/suitable PFZs using
+     *    AI-derived suitability scoring
+     */
 
-    const bestPFZ = pfzs.length
-      ? [...pfzs].sort((a, b) => (b.pfz_score || 0) - (a.pfz_score || 0))[0]
-      : null;
+    const rankedData = toolResults.rankPFZs?.data;
+    const nearbyData = toolResults.getNearbyPFZ?.data;
 
-    parametersUsed.push(
-      "PFZ Score",
-      "Sea Surface Temperature",
-      "Chlorophyll",
-      "Confidence",
-    );
+    const rankedPFZs = Array.isArray(rankedData?.pfzs) ? rankedData.pfzs : [];
+
+    const nearbyPFZs = Array.isArray(nearbyData?.pfzs) ? nearbyData.pfzs : [];
+
+    /*
+     * Detect whether this is a "best/suitable" request.
+     */
+    const query = String(userQuery || "").toLowerCase();
+
+    const isBestPFZQuery =
+      query.includes("best") ||
+      query.includes("highest") ||
+      query.includes("suitable") ||
+      query.includes("good fishing") ||
+      query.includes("productive") ||
+      query.includes("మంచి చేపలు") ||
+      query.includes("మంచి ఫిషింగ్");
+
+    /*
+     * For best PFZ requests, use rankPFZs.
+     * Otherwise use getNearbyPFZ.
+     */
+    const pfzs = isBestPFZQuery ? rankedPFZs : nearbyPFZs;
+
+    /*
+     * Explicitly choose the best PFZ according to the
+     * AI-derived suitability score.
+     */
+    const selectedPFZ = isBestPFZQuery
+      ? [...pfzs].sort(
+          (a, b) =>
+            Number(b.aiSuitabilityScore ?? -Infinity) -
+            Number(a.aiSuitabilityScore ?? -Infinity),
+        )[0]
+      : [...pfzs].sort(
+          (a, b) =>
+            Number(a.distanceKm ?? Infinity) - Number(b.distanceKm ?? Infinity),
+        )[0];
+
+    parametersUsed.push("Distance", "Sea Surface Temperature", "Chlorophyll");
+
+    if (isBestPFZQuery) {
+      parametersUsed.push("AI Suitability Score");
+    }
 
     recommendation = "INFORMATIONAL";
 
-    if (bestPFZ) {
-      if (lang === "te") {
-        answerText = `ఉత్తమంగా గుర్తించిన చేపల వేట ప్రాంతం ${bestPFZ.name}. PFZ స్కోర్ ${bestPFZ.pfz_score}, సముద్ర ఉపరితల ఉష్ణోగ్రత ${bestPFZ.sst}°C, క్లోరోఫిల్ ${bestPFZ.chlorophyll} mg/m³ మరియు విశ్వసనీయత ${bestPFZ.confidence}%.`;
+    if (selectedPFZ) {
+      const name = selectedPFZ.name || "Unnamed Potential Fishing Zone";
+
+      const distance = Number.isFinite(Number(selectedPFZ.distanceKm))
+        ? `${Number(selectedPFZ.distanceKm).toFixed(2)} km`
+        : "distance unavailable";
+
+      const sst =
+        selectedPFZ.sst !== null &&
+        selectedPFZ.sst !== undefined &&
+        Number.isFinite(Number(selectedPFZ.sst))
+          ? `${Number(selectedPFZ.sst).toFixed(2)}°C`
+          : "unavailable";
+
+      const chlorophyll =
+        selectedPFZ.chlorophyll !== null &&
+        selectedPFZ.chlorophyll !== undefined &&
+        Number.isFinite(Number(selectedPFZ.chlorophyll))
+          ? `${Number(selectedPFZ.chlorophyll).toFixed(4)} mg/m³`
+          : "unavailable";
+
+      const source =
+        selectedPFZ.source || selectedPFZ.category || "PFZ service";
+
+      const sourceStatus = selectedPFZ.sourceStatus || "UNKNOWN";
+
+      /*
+       * AI suitability score is our derived score.
+       * It must NOT be presented as an official INCOIS score.
+       */
+      const aiScore =
+        selectedPFZ.aiSuitabilityScore !== null &&
+        selectedPFZ.aiSuitabilityScore !== undefined &&
+        Number.isFinite(Number(selectedPFZ.aiSuitabilityScore))
+          ? Number(selectedPFZ.aiSuitabilityScore).toFixed(2)
+          : null;
+
+      if (isBestPFZQuery) {
+        /*
+         * Explain why this PFZ was ranked highly.
+         *
+         * IMPORTANT:
+         * If no AI suitability score exists, we must NOT
+         * claim that the PFZ was AI-ranked.
+         */
+        const reasons = [];
+
+        if (
+          selectedPFZ.chlorophyll !== null &&
+          selectedPFZ.chlorophyll !== undefined &&
+          Number.isFinite(Number(selectedPFZ.chlorophyll))
+        ) {
+          reasons.push(
+            `live chlorophyll ${Number(selectedPFZ.chlorophyll).toFixed(
+              4,
+            )} mg/m³`,
+          );
+        }
+
+        if (
+          selectedPFZ.sst !== null &&
+          selectedPFZ.sst !== undefined &&
+          Number.isFinite(Number(selectedPFZ.sst))
+        ) {
+          const sstValue = Number(selectedPFZ.sst);
+
+          if (sstValue >= 26 && sstValue <= 30) {
+            reasons.push(`suitable SST of ${sstValue.toFixed(2)}°C`);
+          } else {
+            reasons.push(`SST of ${sstValue.toFixed(2)}°C`);
+          }
+        }
+
+        if (Number.isFinite(Number(selectedPFZ.distanceKm))) {
+          reasons.push(
+            `distance of ${Number(selectedPFZ.distanceKm).toFixed(2)} km`,
+          );
+        }
+
+        /*
+         * Determine whether an actual AI suitability score
+         * was calculated.
+         */
+        const hasAIScore =
+          selectedPFZ.aiSuitabilityScore !== null &&
+          selectedPFZ.aiSuitabilityScore !== undefined &&
+          Number.isFinite(Number(selectedPFZ.aiSuitabilityScore));
+
+        if (lang === "te") {
+          if (hasAIScore) {
+            answerText =
+              `మీ ప్రస్తుత స్థానానికి అందుబాటులో ఉన్న ఉత్తమ ` +
+              `Potential Fishing Zone ${name}. ` +
+              `ఇది సుమారు ${distance} దూరంలో ఉంది. ` +
+              `AI-derived suitability score ${aiScore}. ` +
+              `సముద్ర ఉపరితల ఉష్ణోగ్రత ${sst}, ` +
+              `క్లోరోఫిల్ ${chlorophyll}. ` +
+              `ర్యాంకింగ్ ఆధారాలు: ${reasons.join(", ")}. ` +
+              `డేటా మూలం: ${source}.`;
+          } else {
+            answerText =
+              `మీ ప్రస్తుత స్థానానికి అందుబాటులో ఉన్న ` +
+              `సమీపంలోని live Potential Fishing Zone ${name}. ` +
+              `ఇది సుమారు ${distance} దూరంలో ఉంది. ` +
+              `AI suitability score అందుబాటులో లేదు, ` +
+              `ఎందుకంటే అవసరమైన ర్యాంకింగ్ డేటాలో కొన్ని ` +
+              `పారామీటర్లు అందుబాటులో లేవు. ` +
+              `సముద్ర ఉపరితల ఉష్ణోగ్రత ${sst}, ` +
+              `క్లోరోఫిల్ ${chlorophyll}. ` +
+              `డేటా మూలం: ${source}.`;
+          }
+        } else {
+          if (hasAIScore) {
+            answerText =
+              `The best available Potential Fishing Zone is ${name}. ` +
+              `It is approximately ${distance} from your current location. ` +
+              `Its AI-derived suitability score is ${aiScore}. ` +
+              `Sea surface temperature is ${sst}, ` +
+              `and chlorophyll concentration is ${chlorophyll}. ` +
+              `It was ranked highly using ${reasons.join(", ")}. ` +
+              `Data source: ${source}.`;
+          } else {
+            answerText =
+              `The closest available live Potential Fishing Zone is ${name}. ` +
+              `It is approximately ${distance} from your current location. ` +
+              `An AI suitability score is currently unavailable ` +
+              `because some required ranking parameters are unavailable. ` +
+              `Sea surface temperature is ${sst}, ` +
+              `and chlorophyll concentration is ${chlorophyll}. ` +
+              `Available evidence includes ${reasons.join(", ")}. ` +
+              `Data source: ${source}.`;
+          }
+        }
+      }
+
+      /*
+       * Evidence / live-data status.
+       */
+      if (sourceStatus === "LIVE") {
+        riskFactors.push("PFZ data sourced from live INCOIS service");
       } else {
-        answerText = `The strongest available Potential Fishing Zone is ${bestPFZ.name}. PFZ score is ${bestPFZ.pfz_score}, sea surface temperature is ${bestPFZ.sst}°C, chlorophyll concentration is ${bestPFZ.chlorophyll} mg/m³, and confidence is ${bestPFZ.confidence}%.`;
+        riskFactors.push("PFZ live status unavailable");
+      }
+
+      if (selectedPFZ.sstStatus === "LIVE" && selectedPFZ.sstSource) {
+        riskFactors.push(`SST sourced from ${selectedPFZ.sstSource}`);
+      }
+
+      if (
+        selectedPFZ.chlorophyllStatus === "LIVE" &&
+        selectedPFZ.chlorophyllSource
+      ) {
+        riskFactors.push(
+          `Chlorophyll sourced from ${selectedPFZ.chlorophyllSource}`,
+        );
+      }
+
+      if (isBestPFZQuery) {
+        const hasAIScore =
+          selectedPFZ.aiSuitabilityScore !== null &&
+          selectedPFZ.aiSuitabilityScore !== undefined &&
+          Number.isFinite(Number(selectedPFZ.aiSuitabilityScore));
+
+        if (hasAIScore) {
+          riskFactors.push("PFZ ranking uses AI-derived suitability scoring");
+        } else {
+          riskFactors.push(
+            "AI suitability score unavailable because some ranking parameters were unavailable",
+          );
+        }
       }
     } else {
-      answerText =
-        lang === "te"
-          ? "ప్రస్తుతం PFZ సమాచారం అందుబాటులో లేదు."
-          : "No PFZ information is currently available.";
+      if (lang === "te") {
+        answerText = "ప్రస్తుతం అందుబాటులో ఉన్న PFZ సమాచారం లేదు.";
+      } else {
+        answerText = "No PFZ information is currently available.";
+      }
+
+      if (isBestPFZQuery) {
+        riskFactors.push("Live PFZ ranking data unavailable");
+      } else {
+        riskFactors.push("Live PFZ data unavailable");
+      }
     }
   }
 
@@ -244,8 +486,16 @@ function fallbackSynthesizeResponse(
   else if (intent === "MARINE_SAFETY") {
     const marine = toolResults.analyzeMarine?.data;
 
-    const weather = marine?.weather ?? toolResults.getWeather?.data;
-    const ocean = marine?.ocean ?? toolResults.getOceanConditions?.data;
+    const weather =
+      marine?.weather ??
+      toolResults.getWeatherForecast?.data ??
+      toolResults.getWeather?.data;
+
+    const ocean =
+      marine?.ocean ??
+      toolResults.getMarineForecast?.data ??
+      toolResults.getOceanConditions?.data;
+
     const warnings = marine?.warning ?? toolResults.getWarnings?.data;
 
     const risk = marine?.safety
@@ -263,17 +513,23 @@ function fallbackSynthesizeResponse(
     const rain = weather?.precipitationProbability ?? 0;
 
     parametersUsed.push(
-      `Wind Speed: ${wind} km/h`,
-      `Wave Height: ${waves} m`,
-      `Rain Probability: ${rain}%`,
+      `Wind Speed: ${weather?.windSpeed ?? "N/A"} km/h`,
+      `Wave Height: ${ocean?.waveHeight ?? "N/A"} m`,
+      `Rain Probability: ${weather?.precipitationProbability ?? "N/A"}%`,
     );
 
     if (risk?.level) {
       parametersUsed.push(
-        `Risk Score: ${risk.score}`,
-        `Risk Level: ${risk.level}`,
+        `Environmental Risk Score: ${risk.score}`,
+        `Environmental Risk Level: ${risk.level}`,
       );
     }
+
+    if (warnings?.level) {
+      parametersUsed.push(`Official Warning Level: ${warnings.level}`);
+    }
+
+    parametersUsed.push("Final Safety Decision: DO_NOT_SAIL");
 
     if (warnings?.factors?.length) {
       riskFactors.push(...warnings.factors);
@@ -296,25 +552,51 @@ function fallbackSynthesizeResponse(
       recommendation = "SAFE_TO_SAIL";
     }
 
+    const isForecast =
+      marine?.dataMode === "FORECAST" ||
+      weather?.status === "FORECAST" ||
+      ocean?.status === "FORECAST";
+
     if (lang === "te") {
       if (recommendation === "DO_NOT_SAIL") {
-        answerText = `ప్రస్తుతం సముద్రంలోకి వేటకు వెళ్లడం సిఫార్సు చేయబడదు. IMD హెచ్చరిక స్థాయి: ${
-          warnings?.level || "HIGH"
-        }. గాలి వేగం ${wind} km/h, అలల ఎత్తు ${waves} m, వర్షం సంభావ్యత ${rain}%.`;
+        answerText = isForecast
+          ? `రేపటి సముద్ర పరిస్థితుల అంచనా ఆధారంగా సముద్రంలోకి వెళ్లడం సిఫార్సు చేయబడదు. IMD హెచ్చరిక స్థాయి: ${
+              warnings?.level || "HIGH"
+            }. అంచనా గాలి వేగం ${wind} km/h, అలల ఎత్తు ${waves} m, వర్షం సంభావ్యత ${rain}%.`
+          : `ప్రస్తుతం సముద్రంలోకి వేటకు వెళ్లడం సిఫార్సు చేయబడదు. IMD హెచ్చరిక స్థాయి: ${
+              warnings?.level || "HIGH"
+            }. గాలి వేగం ${wind} km/h, అలల ఎత్తు ${waves} m, వర్షం సంభావ్యత ${rain}%.`;
       } else if (recommendation === "PROCEED_WITH_CAUTION") {
-        answerText = `సముద్ర పరిస్థితుల్లో జాగ్రత్త అవసరం. గాలి వేగం ${wind} km/h, అలల ఎత్తు ${waves} m, వర్షం సంభావ్యత ${rain}%.`;
+        answerText = isForecast
+          ? `రేపటి సముద్ర పరిస్థితుల అంచనా ప్రకారం జాగ్రత్తగా వెళ్లాలి. గాలి వేగం ${wind} km/h, అలల ఎత్తు ${waves} m, వర్షం సంభావ్యత ${rain}%.`
+          : `ప్రస్తుత సముద్ర పరిస్థితుల్లో జాగ్రత్త అవసరం. గాలి వేగం ${wind} km/h, అలల ఎత్తు ${waves} m, వర్షం సంభావ్యత ${rain}%.`;
       } else {
-        answerText = `ప్రస్తుత డేటా ఆధారంగా సముద్ర పరిస్థితులు తక్కువ ప్రమాదంగా కనిపిస్తున్నాయి. గాలి వేగం ${wind} km/h, అలల ఎత్తు ${waves} m, వర్షం సంభావ్యత ${rain}%.`;
+        answerText = isForecast
+          ? `రేపటి సముద్ర పరిస్థితుల అంచనా ప్రకారం ప్రమాదం తక్కువగా కనిపిస్తోంది. గాలి వేగం ${wind} km/h, అలల ఎత్తు ${waves} m, వర్షం సంభావ్యత ${rain}%.`
+          : `ప్రస్తుత డేటా ఆధారంగా సముద్ర పరిస్థితులు తక్కువ ప్రమాదంగా కనిపిస్తున్నాయి. గాలి వేగం ${wind} km/h, అలల ఎత్తు ${waves} m, వర్షం సంభావ్యత ${rain}%.`;
       }
     } else {
+      const isForecast =
+        marine?.dataMode === "FORECAST" ||
+        weather?.status === "FORECAST" ||
+        ocean?.status === "FORECAST";
+
+      const conditionLabel = isForecast
+        ? "Tomorrow's forecast"
+        : "Current conditions";
+
       if (recommendation === "DO_NOT_SAIL") {
-        answerText = `Do not venture into the sea at this time. IMD warning level is ${
-          warnings?.level || "HIGH"
-        }. Current wind speed is ${wind} km/h, wave height is ${waves} m, and precipitation probability is ${rain}%.`;
+        answerText = isForecast
+          ? `Do not plan to venture into the sea based on tomorrow's forecast. IMD warning level is ${
+              warnings?.level || "HIGH"
+            }. Forecast wind speed is ${wind} km/h, wave height is ${waves} m, and precipitation probability is ${rain}%.`
+          : `Do not venture into the sea at this time. IMD warning level is ${
+              warnings?.level || "HIGH"
+            }. Current wind speed is ${wind} km/h, wave height is ${waves} m, and precipitation probability is ${rain}%.`;
       } else if (recommendation === "PROCEED_WITH_CAUTION") {
-        answerText = `Proceed only with caution. Current wind speed is ${wind} km/h, wave height is ${waves} m, and precipitation probability is ${rain}%.`;
+        answerText = `${conditionLabel} indicate that you should proceed only with caution. Wind speed is ${wind} km/h, wave height is ${waves} m, and precipitation probability is ${rain}%.`;
       } else {
-        answerText = `Current environmental conditions appear relatively low risk based on the available data. Wind speed is ${wind} km/h, wave height is ${waves} m, and precipitation probability is ${rain}%.`;
+        answerText = `${conditionLabel} appear relatively low risk based on the available data. Wind speed is ${wind} km/h, wave height is ${waves} m, and precipitation probability is ${rain}%.`;
       }
     }
   }
@@ -367,8 +649,13 @@ function fallbackSynthesizeResponse(
   // MARINE CONDITIONS
   // ==================================================
   else if (intent === "MARINE_CONDITIONS") {
-    const weather = toolResults.getWeather?.data;
-    const ocean = toolResults.getOceanConditions?.data;
+    const weather =
+      toolResults.getWeatherForecast?.data || toolResults.getWeather?.data;
+
+    const ocean =
+      toolResults.getMarineForecast?.data ||
+      toolResults.getOceanConditions?.data;
+
     const warnings = toolResults.getWarnings?.data;
 
     recommendation = "INFORMATIONAL";
@@ -385,9 +672,9 @@ function fallbackSynthesizeResponse(
     }
 
     if (lang === "te") {
-      answerText = `ప్రస్తుత సముద్ర పరిస్థితులు: గాలి వేగం ${weather?.windSpeed ?? "N/A"} km/h, అలల ఎత్తు ${ocean?.waveHeight ?? "N/A"} m, అలల కాలం ${ocean?.wavePeriod ?? "N/A"} s, సముద్ర ఉపరితల ఉష్ణోగ్రత ${ocean?.sst ?? "N/A"}°C.`;
+      answerText = `రేపటి అంచనా సముద్ర పరిస్థితులు: గాలి వేగం ${weather?.windSpeed ?? "N/A"} km/h, అలల ఎత్తు ${ocean?.waveHeight ?? "N/A"} m, అలల వ్యవధి ${ocean?.wavePeriod ?? "N/A"} s, సముద్ర ఉపరితల ఉష్ణోగ్రత ${ocean?.sst ?? "N/A"}°C.`;
     } else {
-      answerText = `Current sea conditions: wind speed ${weather?.windSpeed ?? "N/A"} km/h, wave height ${ocean?.waveHeight ?? "N/A"} m, wave period ${ocean?.wavePeriod ?? "N/A"} s, and sea surface temperature ${ocean?.sst ?? "N/A"}°C.`;
+      answerText = `Tomorrow's forecasted sea conditions: wind speed ${weather?.windSpeed ?? "N/A"} km/h, wave height ${ocean?.waveHeight ?? "N/A"} m, wave period ${ocean?.wavePeriod ?? "N/A"} s, and sea surface temperature ${ocean?.sst ?? "N/A"}°C.`;
     }
   }
 

@@ -1,6 +1,13 @@
 const { getPFZs } = require("../../services/pfzService");
-const { getWeatherConditions } = require("../../services/weatherService");
-const { getMarineConditions } = require("../../services/marineDataService");
+const {
+  getWeatherConditions,
+  getWeatherForecast,
+} = require("../../services/weatherService");
+
+const {
+  getMarineConditions,
+  getMarineForecast,
+} = require("../../services/marineDataService");
 const { getMarineWarnings } = require("../../services/marineWarningService");
 const { checkGeofence } = require("../../services/geofenceService");
 const { calculateRisk } = require("../../../risk-engine/riskCalculator");
@@ -11,6 +18,7 @@ async function analyzeMarine(req, res) {
   try {
     const latitude = Number(req.body.latitude ?? 16.7);
     const longitude = Number(req.body.longitude ?? 82.3);
+    const targetDate = req.body.targetDate || null;
 
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
       return res.status(400).json({
@@ -22,12 +30,28 @@ async function analyzeMarine(req, res) {
     console.log(`[Marine Analyze] ${latitude}, ${longitude}`);
 
     // Fetch independent data sources in parallel.
+    const useForecast = Boolean(targetDate);
+
+    console.log(
+      `[Marine Analyze] Data mode: ${useForecast ? "FORECAST" : "LIVE"}`,
+    );
+
     const [pfzResult, weather, ocean, warning, geofence, cyclone] =
       await Promise.all([
         Promise.resolve(getPFZs("ALL")),
-        getWeatherConditions(latitude, longitude),
-        getMarineConditions(latitude, longitude),
+
+        useForecast
+          ? getWeatherForecast(latitude, longitude, targetDate)
+          : getWeatherConditions(latitude, longitude),
+
+        useForecast
+          ? getMarineForecast(latitude, longitude, targetDate)
+          : getMarineConditions(latitude, longitude),
+
+        // IMD warning is currently the latest official warning.
+        // It is not a forecast-specific warning.
         getMarineWarnings(latitude, longitude),
+
         Promise.resolve(checkGeofence(latitude, longitude)),
         getCycloneStatus(latitude, longitude),
       ]);
@@ -66,6 +90,8 @@ async function analyzeMarine(req, res) {
 
     res.json({
       success: true,
+      dataMode: useForecast ? "FORECAST" : "LIVE",
+      targetDate: targetDate,
 
       location: {
         latitude,
