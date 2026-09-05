@@ -112,11 +112,76 @@ function calculateRisk(data = {}) {
     recommendation = "CAUTION";
   }
 
+  // Per-factor risk score contribution breakdown
+  const perFactorBreakdown = {
+    officialWarning: {
+      points: data.officialWarning === "HIGH" ? 60 : data.officialWarning === "MODERATE" ? 30 : 0,
+      maxPoints: 60,
+      value: data.officialWarning || "NONE",
+      detail: data.officialWarning ? `Official ${data.officialWarning} marine warning` : "No official warning",
+    },
+    wind: {
+      points: wind > THRESHOLDS.wind.high ? 40 : wind > THRESHOLDS.wind.moderate ? 25 : wind > THRESHOLDS.wind.low ? 10 : 0,
+      maxPoints: 40,
+      value: `${wind} knots`,
+      detail: `Wind speed ${wind} knots`,
+    },
+    windGust: {
+      points: windGust > THRESHOLDS.windGust.high ? 40 : windGust > THRESHOLDS.windGust.moderate ? 25 : windGust > THRESHOLDS.windGust.low ? 10 : 0,
+      maxPoints: 40,
+      value: `${windGust} knots`,
+      detail: `Wind gust ${windGust} knots`,
+    },
+    waveHeight: {
+      points: waveHeight > THRESHOLDS.waveHeight.high ? 40 : waveHeight > THRESHOLDS.waveHeight.moderate ? 25 : waveHeight > THRESHOLDS.waveHeight.low ? 10 : 0,
+      maxPoints: 40,
+      value: `${waveHeight} m`,
+      detail: `Wave height ${waveHeight} m`,
+    },
+    rainProbability: {
+      points: rainProb > THRESHOLDS.rainProbability.high ? 15 : rainProb > THRESHOLDS.rainProbability.moderate ? 10 : 0,
+      maxPoints: 15,
+      value: `${rainProb}%`,
+      detail: `Precipitation probability ${rainProb}%`,
+    },
+    lightning: {
+      points: lightning >= 3 ? 20 : lightning >= 1 ? 10 : 0,
+      maxPoints: 20,
+      value: lightning ? `${lightning} strikes` : "NONE",
+      detail: lightning ? `Lightning detected (${lightning})` : "No lightning detected",
+    },
+    cyclone: {
+      points: data.cyclone === true ? 100 : 0,
+      maxPoints: 100,
+      value: data.cyclone === true ? "ACTIVE" : "NONE",
+      detail: data.cyclone === true ? "Active cyclone warning in area" : "No active cyclone",
+    },
+  };
+
+  // Calculate confidence score based on input availability
+  let evaluatedInputs = 0;
+  let totalInputs = 6;
+  if (data.wind !== undefined || data.windSpeed !== undefined) evaluatedInputs++;
+  if (data.waveHeight !== undefined) evaluatedInputs++;
+  if (data.rainProbability !== undefined) evaluatedInputs++;
+  if (data.lightning !== undefined) evaluatedInputs++;
+  if (data.officialWarning !== undefined) evaluatedInputs++;
+  if (data.cyclone !== undefined) evaluatedInputs++;
+
+  const confidenceScore = Math.round((evaluatedInputs / totalInputs) * 100);
+
   return {
     score,
     level,
     factors,
     recommendation,
+    perFactorBreakdown,
+    confidenceScore,
+    explainability: {
+      summary: `Overall marine risk level: ${level} (risk score ${score}/100 based on ${factors.length > 0 ? factors.join(", ") : "favorable conditions"})`,
+      primaryRiskDriver: factors[0] || "No major hazard detected",
+      confidenceScore,
+    },
   };
 }
 

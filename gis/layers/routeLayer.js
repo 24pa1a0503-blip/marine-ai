@@ -3,8 +3,8 @@
  * Converts vessel navigation route waypoints into standard GeoJSON LineString [lon, lat]
  * and provides bounding box calculation for map fitBounds().
  */
-import { checkRouteGeofence } from '../geofence';
-import { calculateRouteTotalDistance } from '../distance';
+import { checkRouteGeofence } from '../geofence.js';
+import { calculateRouteTotalDistance } from '../distance.js';
 
 export function createRouteGeoJSON(waypoints) {
     if (!waypoints || waypoints.length < 2) {

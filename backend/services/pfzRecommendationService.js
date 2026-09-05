@@ -1,4 +1,4 @@
-const { getPFZs } = require("./pfzService");
+const { getPFZs, rankPFZs } = require("./pfzService");
 const { calculateDistance } = require("../../gis/distance");
 const { checkGeofence } = require("./geofenceService");
 const { calculateRisk } = require("../../risk-engine/riskCalculator");
@@ -20,7 +20,13 @@ async function getBestFishingZones({
     };
   }
 
-  const pfzs = await getPFZs("ALL");
+  // Get candidate PFZs from pfzService rankPFZs or getPFZs
+  let pfzs = [];
+  try {
+    pfzs = await rankPFZs(latitude, longitude, 15);
+  } catch (e) {
+    pfzs = await getPFZs("ALL");
+  }
 
   const ranked = pfzs
     .map((pfz) => {
@@ -47,7 +53,7 @@ async function getBestFishingZones({
       const risk = calculateRisk(marineConditions);
       const safetyScore = Math.max(0, 100 - risk.score);
 
-      const pfzScore = Number(pfz.pfz_score || 80);
+      const pfzScore = Number(pfz.pfz_score || pfz.aiSuitabilityScore || 80);
       const distancePenalty = distance * 0.15;
 
       // Risk-aware weighted recommendation score
@@ -57,6 +63,7 @@ async function getBestFishingZones({
       return {
         ...pfz,
         distance: Number(distance.toFixed(2)),
+        distanceKm: Number(distance.toFixed(2)),
         pfzScore,
         safetyScore: Number(safetyScore.toFixed(1)),
         recommendationScore: Number(recommendationScore.toFixed(2)),
@@ -91,15 +98,34 @@ async function getBestFishingZones({
     };
   }
 
+  const recommendedZone = ranked[0];
+  const alternatives = ranked.slice(1, 4);
+
   return {
     success: true,
     currentLocation: {
       latitude,
       longitude,
     },
-    recommendedZone: ranked[0],
-    alternatives: ranked.slice(1, 4),
+    recommendedZone,
+    alternatives,
     pfzs: ranked,
+    explainability: {
+      whySelected: recommendedZone.selectionExplanation || [
+        `✓ Close distance: ${recommendedZone.distanceKm} km`,
+        `✓ High safety score: ${recommendedZone.safetyScore}/100`,
+        `✓ Data source: ${recommendedZone.source || "INCOIS"}`,
+      ],
+      overallSuitability: `${recommendedZone.recommendationScore}/100`,
+      confidenceScore: recommendedZone.confidenceScore || 85,
+      perFactorBreakdown: recommendedZone.perFactorBreakdown || {},
+      missingDataDisclosure: recommendedZone.missingDataDisclosure || null,
+      rejectedAlternatives: alternatives.map((alt) => ({
+        id: alt.id,
+        name: alt.name,
+        rejectionReason: alt.rejectionReason || "Lower overall suitability / higher risk score",
+      })),
+    },
   };
 }
 

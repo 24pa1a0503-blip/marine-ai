@@ -261,6 +261,27 @@ function optimizeRoute(
       // FINAL RESPONSE
       // ========================================
 
+      const whySelected = [
+        `✓ Route distance: ${distance} grid units`,
+        `✓ Total risk cost along path: ${totalRiskCost}`,
+      ];
+      if (avoidedHazards.length > 0) {
+        whySelected.push(`✓ Avoided ${avoidedHazards.length} hazardous/restricted cells`);
+      } else {
+        whySelected.push(`✓ Clear sailing line with minimal risk penalty`);
+      }
+
+      const routeExplanation = {
+        summary: explanation,
+        whySelected,
+        confidenceScore: Math.max(60, 95 - Math.min(30, totalRiskCost)),
+        perFactorBreakdown: {
+          distanceCost: { points: distance, detail: `Grid distance cost: ${distance}` },
+          riskCost: { points: totalRiskCost, detail: `Cumulative risk penalty: ${totalRiskCost}` },
+          avoidedHazardsCount: avoidedHazards.length,
+        },
+      };
+
       const response = {
         success: true,
 
@@ -273,6 +294,8 @@ function optimizeRoute(
         totalCost,
 
         explanation,
+
+        routeExplanation,
 
         avoidedHazards,
       };

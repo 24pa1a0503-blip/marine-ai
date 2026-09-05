@@ -372,6 +372,14 @@ function checkRouteGeofence(waypoints) {
 }
 
 // Universal Export Support (Node.js CommonJS & ES Module)
+export {
+    DEMO_DISCLAIMER,
+    GEOFENCE_ZONES,
+    checkPointGeofence,
+    checkPFZsGeofence,
+    checkRouteGeofence
+};
+
 const GeofenceEngine = {
     DEMO_DISCLAIMER,
     GEOFENCE_ZONES,
@@ -380,6 +388,4 @@ const GeofenceEngine = {
     checkRouteGeofence
 };
 
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = GeofenceEngine;
-}
+export default GeofenceEngine;

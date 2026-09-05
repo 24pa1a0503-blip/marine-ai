@@ -495,11 +495,10 @@ async function rankPFZs(latitude, longitude, limit = 5) {
    * factors are normalized to 100.
    */
   const rankedPFZs = enrichedPFZs.map((pfz) => {
-    let rawScore = 0;
-    let availableWeight = 0;
-
-    const availableFactors = [];
-    const unavailableFactors = [];
+    let chlPoints = 0;
+    let distPoints = 0;
+    let sstPoints = 0;
+    let officialPoints = 0;
 
     /*
      * --------------------------------------------------
@@ -515,7 +514,8 @@ async function rankPFZs(latitude, longitude, limit = 5) {
       maxChlorophyll !== null &&
       maxChlorophyll > 0
     ) {
-      rawScore += (chlorophyll / maxChlorophyll) * 45;
+      chlPoints = (chlorophyll / maxChlorophyll) * 45;
+      rawScore += chlPoints;
 
       availableWeight += 45;
       availableFactors.push("Chlorophyll");
@@ -531,16 +531,13 @@ async function rankPFZs(latitude, longitude, limit = 5) {
     const distance = Number(pfz.distanceKm);
 
     if (Number.isFinite(distance)) {
-      let distanceScore;
-
       if (maxDistance > minDistance) {
-        distanceScore =
-          ((maxDistance - distance) / (maxDistance - minDistance)) * 25;
+        distPoints = ((maxDistance - distance) / (maxDistance - minDistance)) * 25;
       } else {
-        distanceScore = 25;
+        distPoints = 25;
       }
 
-      rawScore += distanceScore;
+      rawScore += distPoints;
       availableWeight += 25;
       availableFactors.push("Distance");
     } else {
@@ -555,17 +552,15 @@ async function rankPFZs(latitude, longitude, limit = 5) {
     const sst = Number(pfz.sst);
 
     if (pfz.sst !== null && pfz.sst !== undefined && Number.isFinite(sst)) {
-      let sstScore;
-
       if (sst >= 26 && sst <= 30) {
-        sstScore = 20;
+        sstPoints = 20;
       } else if ((sst >= 24 && sst < 26) || (sst > 30 && sst <= 32)) {
-        sstScore = 12;
+        sstPoints = 12;
       } else {
-        sstScore = 5;
+        sstPoints = 5;
       }
 
-      rawScore += sstScore;
+      rawScore += sstPoints;
       availableWeight += 20;
       availableFactors.push("SST");
     } else {
@@ -576,9 +571,6 @@ async function rankPFZs(latitude, longitude, limit = 5) {
      * --------------------------------------------------
      * 4. Official INCOIS PFZ score — 10 points
      * --------------------------------------------------
-     *
-     * We only use this when it actually exists.
-     * Current INCOIS WFS normally returns null.
      */
     const officialPFZScore = Number(pfz.pfz_score);
 
@@ -592,7 +584,8 @@ async function rankPFZs(latitude, longitude, limit = 5) {
         Math.min(100, officialPFZScore),
       );
 
-      rawScore += (normalizedOfficialScore / 100) * 10;
+      officialPoints = (normalizedOfficialScore / 100) * 10;
+      rawScore += officialPoints;
 
       availableWeight += 10;
       availableFactors.push("Official PFZ score");
@@ -600,32 +593,69 @@ async function rankPFZs(latitude, longitude, limit = 5) {
       unavailableFactors.push("Official PFZ score");
     }
 
-    /*
-     * --------------------------------------------------
-     * Normalize available factors to 100.
-     * --------------------------------------------------
-     *
-     * Example:
-     *
-     * Available:
-     *   Distance = 25
-     *   SST      = 20
-     *
-     * Available weight = 45
-     *
-     * Final score =
-     *   rawScore / 45 * 100
-     */
     const aiSuitabilityScore =
       availableWeight > 0
         ? Number(((rawScore / availableWeight) * 100).toFixed(2))
         : null;
 
-    /*
-     * Data completeness tells the user how much
-     * of the scoring model was actually available.
-     */
     const dataCompleteness = Number(((availableWeight / 100) * 100).toFixed(0));
+
+    // Per-factor score breakdown
+    const perFactorBreakdown = {
+      chlorophyll: {
+        points: Number(chlPoints.toFixed(2)),
+        maxPoints: 45,
+        value: Number.isFinite(chlorophyll) ? `${chlorophyll.toFixed(4)} mg/m³` : null,
+        status: pfz.chlorophyllStatus || "UNAVAILABLE",
+        detail: Number.isFinite(chlorophyll) ? `Chlorophyll concentration ${chlorophyll.toFixed(4)} mg/m³` : "Chlorophyll data unavailable",
+      },
+      distance: {
+        points: Number(distPoints.toFixed(2)),
+        maxPoints: 25,
+        value: Number.isFinite(distance) ? `${distance.toFixed(2)} km` : null,
+        status: "LIVE",
+        detail: Number.isFinite(distance) ? `Distance ${distance.toFixed(2)} km from vessel` : "Distance unavailable",
+      },
+      sst: {
+        points: Number(sstPoints.toFixed(2)),
+        maxPoints: 20,
+        value: Number.isFinite(sst) ? `${sst.toFixed(2)}°C` : null,
+        status: pfz.sstStatus || "UNAVAILABLE",
+        detail: Number.isFinite(sst) ? `Sea surface temperature ${sst.toFixed(2)}°C` : "SST data unavailable",
+      },
+      officialScore: {
+        points: Number(officialPoints.toFixed(2)),
+        maxPoints: 10,
+        value: Number.isFinite(officialPFZScore) ? officialPFZScore : null,
+        status: pfz.sourceStatus || "PROTOTYPE",
+        detail: Number.isFinite(officialPFZScore) ? `INCOIS score ${officialPFZScore}` : "Official INCOIS score unavailable",
+      },
+    };
+
+    // Selection explanation items
+    const selectionExplanation = [];
+    if (Number.isFinite(distance)) {
+      selectionExplanation.push(`✓ Close: ${distance.toFixed(2)} km`);
+    }
+    if (Number.isFinite(chlorophyll)) {
+      selectionExplanation.push(`✓ Chlorophyll: ${chlorophyll.toFixed(4)} mg/m³`);
+    }
+    if (Number.isFinite(sst)) {
+      selectionExplanation.push(`✓ SST: ${sst.toFixed(2)}°C`);
+    }
+    if (pfz.sourceStatus === "LIVE" || pfz.source === "INCOIS") {
+      selectionExplanation.push(`✓ Live INCOIS PFZ`);
+    } else {
+      selectionExplanation.push(`✓ Prototype PFZ Zone`);
+    }
+
+    const confidenceScore = Math.round(
+      (availableWeight / 100) * 75 + (pfz.sourceStatus === "LIVE" ? 25 : 15)
+    );
+
+    const missingDataDisclosure = unavailableFactors.length > 0
+      ? `Missing factors: ${unavailableFactors.join(", ")}. Remaining available factors (${availableFactors.join(", ")}) were re-weighted to 100.`
+      : "Full parameter coverage available for scoring.";
 
     return {
       ...pfz,
@@ -633,6 +663,14 @@ async function rankPFZs(latitude, longitude, limit = 5) {
       aiSuitabilityScore,
 
       scoreDataCompleteness: dataCompleteness,
+
+      perFactorBreakdown,
+
+      selectionExplanation,
+
+      confidenceScore,
+
+      missingDataDisclosure,
 
       scoringFactors: {
         available: availableFactors,
@@ -655,21 +693,50 @@ async function rankPFZs(latitude, longitude, limit = 5) {
    * If two PFZs have the same score, prefer the
    * closer PFZ.
    */
-  return rankedPFZs
-    .sort((a, b) => {
-      const scoreA = Number(a.aiSuitabilityScore ?? -Infinity);
+  const sorted = rankedPFZs.sort((a, b) => {
+    const scoreA = Number(a.aiSuitabilityScore ?? -Infinity);
+    const scoreB = Number(b.aiSuitabilityScore ?? -Infinity);
 
-      const scoreB = Number(b.aiSuitabilityScore ?? -Infinity);
+    if (scoreB !== scoreA) {
+      return scoreB - scoreA;
+    }
 
-      if (scoreB !== scoreA) {
-        return scoreB - scoreA;
-      }
+    return (
+      Number(a.distanceKm ?? Infinity) - Number(b.distanceKm ?? Infinity)
+    );
+  });
 
-      return (
-        Number(a.distanceKm ?? Infinity) - Number(b.distanceKm ?? Infinity)
-      );
-    })
-    .slice(0, Number(limit));
+  // Attach rejection reasons to secondary candidates relative to the top candidate
+  const topCandidate = sorted[0];
+  const finalRanked = sorted.map((pfz, index) => {
+    if (index === 0 || !topCandidate) {
+      return {
+        ...pfz,
+        isSelected: true,
+        rejectionReason: null,
+      };
+    }
+
+    const reasons = [];
+    if (pfz.distanceKm && topCandidate.distanceKm && pfz.distanceKm > topCandidate.distanceKm) {
+      const diff = (pfz.distanceKm - topCandidate.distanceKm).toFixed(1);
+      reasons.push(`Farther distance (${pfz.distanceKm} km vs ${topCandidate.distanceKm} km, +${diff} km)`);
+    }
+    if (pfz.chlorophyll !== null && topCandidate.chlorophyll !== null && Number(pfz.chlorophyll) < Number(topCandidate.chlorophyll)) {
+      reasons.push(`Lower chlorophyll (${Number(pfz.chlorophyll).toFixed(2)} vs ${Number(topCandidate.chlorophyll).toFixed(2)} mg/m³)`);
+    }
+    if (pfz.aiSuitabilityScore !== null && topCandidate.aiSuitabilityScore !== null && pfz.aiSuitabilityScore < topCandidate.aiSuitabilityScore) {
+      reasons.push(`Lower overall suitability score (${pfz.aiSuitabilityScore} vs ${topCandidate.aiSuitabilityScore}/100)`);
+    }
+
+    return {
+      ...pfz,
+      isSelected: false,
+      rejectionReason: reasons.length > 0 ? reasons.join("; ") : "Lower overall suitability score",
+    };
+  });
+
+  return finalRanked.slice(0, Number(limit));
 }
 
 module.exports = {

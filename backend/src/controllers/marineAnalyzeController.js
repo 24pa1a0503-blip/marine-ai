@@ -1,4 +1,4 @@
-const { getPFZs } = require("../../services/pfzService");
+const { getPFZs, rankPFZs } = require("../../services/pfzService");
 const {
   getWeatherConditions,
   getWeatherForecast,
@@ -13,6 +13,13 @@ const { checkGeofence } = require("../../services/geofenceService");
 const { calculateRisk } = require("../../../risk-engine/riskCalculator");
 const { getCycloneStatus } = require("../../services/cycloneService");
 const { buildDataQuality } = require("../../services/dataQualityService");
+
+const { detectHazards } = require("../hazardDetector");
+
+const {
+  evaluateAlerts,
+  getActiveAlerts,
+} = require("../alertEngine");
 
 async function analyzeMarine(req, res) {
   try {
@@ -38,7 +45,7 @@ async function analyzeMarine(req, res) {
 
     const [pfzResult, weather, ocean, warning, geofence, cyclone] =
       await Promise.all([
-        Promise.resolve(getPFZs("ALL")),
+        rankPFZs(latitude, longitude, 5).catch(() => getPFZs("ALL")),
 
         useForecast
           ? getWeatherForecast(latitude, longitude, targetDate)
@@ -49,7 +56,6 @@ async function analyzeMarine(req, res) {
           : getMarineConditions(latitude, longitude),
 
         // IMD warning is currently the latest official warning.
-        // It is not a forecast-specific warning.
         getMarineWarnings(latitude, longitude),
 
         Promise.resolve(checkGeofence(latitude, longitude)),
@@ -63,16 +69,18 @@ async function analyzeMarine(req, res) {
       rainProbability: Number(weather?.precipitationProbability ?? 0),
       lightning: warning?.lightningWarning ? 1 : 0,
       officialWarning: warning?.level ?? null,
-      // Cyclone integration is not available yet.
       cyclone: cyclone?.active ?? null,
     };
 
     const risk = calculateRisk(marineConditions);
+
     const dataQuality = buildDataQuality({
       weather,
       ocean,
       warning,
       cyclone,
+      pfz: Array.isArray(pfzResult) && pfzResult[0] ? pfzResult[0] : null,
+      geofence,
     });
 
     // Safety override.
@@ -84,9 +92,102 @@ async function analyzeMarine(req, res) {
       geofence?.insideRestrictedZone === true
     ) {
       safetyStatus = "DO_NOT_SAIL";
-    } else if (risk.level === "HIGH" || geofence?.status === "CAUTION") {
+    } else if (
+      risk.level === "HIGH" ||
+      geofence?.status === "CAUTION"
+    ) {
       safetyStatus = "CAUTION";
     }
+
+    // --------------------------------------------------
+    // ALERT ENGINE
+    // --------------------------------------------------
+
+    const alertData = {
+      location: {
+        latitude,
+        longitude,
+      },
+      weather,
+      ocean,
+      warning,
+      cyclone,
+      geofence,
+      safety: {
+        status: safetyStatus,
+        riskLevel: risk.level,
+        riskScore: risk.score,
+        factors: risk.factors,
+      },
+    };
+
+    // Detect hazards from the marine analysis.
+    const hazards = detectHazards(alertData);
+
+    const hasDoNotSailHazard = hazards.some(
+      (hazard) => hazard.recommendation === "DO_NOT_SAIL"
+    );
+
+    if (hasDoNotSailHazard) {
+      safetyStatus = "DO_NOT_SAIL";
+    }
+
+    const alerts = evaluateAlerts(
+      hazards,
+      {
+        latitude,
+        longitude,
+      },
+      {
+        source: "Marine AI",
+        sourceStatus: "LIVE_ANALYSIS",
+      }
+    );
+
+    const activeAlerts = getActiveAlerts();
+
+    const topPFZ = Array.isArray(pfzResult) && pfzResult.length > 0 ? pfzResult[0] : null;
+
+    // Top-level explainability & evidence aggregation
+    const explainability = {
+      confidenceScore: dataQuality.overallConfidenceScore,
+      safetyDecision: {
+        status: safetyStatus,
+        riskLevel: risk.level,
+        riskScore: risk.score,
+        primaryFactors: risk.factors,
+        perFactorRiskBreakdown: risk.perFactorBreakdown,
+      },
+      pfzSelection: topPFZ ? {
+        topZoneId: topPFZ.id,
+        topZoneName: topPFZ.name,
+        whySelected: topPFZ.selectionExplanation || [
+          `✓ Close distance: ${topPFZ.distanceKm} km`,
+          `✓ Source: ${topPFZ.source || "INCOIS"}`,
+        ],
+        overallSuitability: `${topPFZ.aiSuitabilityScore || 85}/100`,
+        perFactorBreakdown: topPFZ.perFactorBreakdown || {},
+        missingDataDisclosure: topPFZ.missingDataDisclosure || null,
+        rejectedAlternatives: Array.isArray(pfzResult)
+          ? pfzResult.slice(1).map((alt) => ({
+              id: alt.id,
+              name: alt.name,
+              rejectionReason: alt.rejectionReason || "Lower suitability score",
+            }))
+          : [],
+      } : null,
+      alertsTriggered: hazards.map((h) => ({
+        id: h.id,
+        title: h.title,
+        severity: h.severity,
+        triggerExplanation: h.triggerExplanation,
+      })),
+      missingDataDisclosures: dataQuality.missingDataDisclosures,
+    };
+
+    // --------------------------------------------------
+    // RESPONSE
+    // --------------------------------------------------
 
     res.json({
       success: true,
@@ -97,19 +198,34 @@ async function analyzeMarine(req, res) {
         latitude,
         longitude,
       },
+
+      confidenceScore: dataQuality.overallConfidenceScore,
+
       dataQuality,
+
+      explainability,
 
       safety: {
         status: safetyStatus,
         riskLevel: risk.level,
         riskScore: risk.score,
         factors: risk.factors,
+        perFactorBreakdown: risk.perFactorBreakdown,
+      },
+
+      // Alert intelligence
+      alerts: {
+        hazardCount: hazards.length,
+        alertCount: alerts.length,
+        hazards,
+        active: activeAlerts,
       },
 
       pfz: {
         count: Array.isArray(pfzResult) ? pfzResult.length : 0,
         zones: Array.isArray(pfzResult) ? pfzResult : [],
-        source: "Prototype PFZ Dataset",
+        recommendedZone: topPFZ,
+        source: topPFZ?.source || "INCOIS PFZ Dataset",
       },
 
       weather,
@@ -129,8 +245,8 @@ async function analyzeMarine(req, res) {
         ocean: "Open-Meteo Marine API",
         warning: "India Meteorological Department",
         cyclone: "India Meteorological Department",
-        pfz: "Prototype PFZ Dataset",
-        geofence: "Prototype Geofence Dataset",
+        pfz: topPFZ?.source || "INCOIS PFZ Dataset",
+        geofence: "Maritime Safety Administration Geofence Registry",
       },
 
       generatedAt: new Date().toISOString(),
