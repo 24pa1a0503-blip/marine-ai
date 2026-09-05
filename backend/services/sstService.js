@@ -1,43 +1,58 @@
 const https = require("https");
 
-const OPEN_METEO_MARINE_URL =
-  "https://marine-api.open-meteo.com/v1/marine";
+const MUR_SST_URL =
+  "https://coastwatch.pfeg.noaa.gov/erddap/griddap/jplMURSST41.csv";
 
-function fetchJSON(url) {
+function fetchSST(latitude, longitude) {
   return new Promise((resolve, reject) => {
+    const url = `${MUR_SST_URL}?analysed_sst[last][(${latitude})][(${longitude})]`;
+
     https
       .get(
         url,
         {
           headers: {
-            "User-Agent": "Marine-AI-Prototype/1.0",
+            Accept: "text/csv",
+            "User-Agent": "Marine-AI/1.0",
           },
         },
-        (response) => {
+        (res) => {
           let data = "";
 
-          response.on("data", (chunk) => {
+          res.on("data", (chunk) => {
             data += chunk;
           });
 
-          response.on("end", () => {
-            if (response.statusCode !== 200) {
+          res.on("end", () => {
+            if (res.statusCode !== 200) {
               return reject(
-                new Error(
-                  `Open-Meteo returned status ${response.statusCode}: ${data}`,
-                ),
+                new Error(`MUR SST API returned HTTP ${res.statusCode}`),
               );
             }
 
-            try {
-              resolve(JSON.parse(data));
-            } catch (error) {
-              reject(
-                new Error(
-                  `Failed to parse Open-Meteo response: ${error.message}`,
-                ),
+            const lines = data.trim().split(/\r?\n/);
+
+            if (lines.length < 3) {
+              return reject(new Error("Invalid MUR SST response"));
+            }
+
+            const values = lines[2].split(",");
+            const sst = Number(values[3]);
+
+            if (!Number.isFinite(sst)) {
+              return reject(
+                new Error("MUR SST value is unavailable at this location"),
               );
             }
+
+            resolve({
+              latitude: Number(values[1]),
+              longitude: Number(values[2]),
+              sst: sst,
+              timestamp: values[0],
+              source: "NASA JPL MUR SST",
+              status: "LIVE",
+            });
           });
         },
       )
@@ -45,48 +60,6 @@ function fetchJSON(url) {
   });
 }
 
-async function getSST(lat, lon) {
-  const latitude = Number(lat);
-  const longitude = Number(lon);
-
-  if (
-    !Number.isFinite(latitude) ||
-    !Number.isFinite(longitude) ||
-    latitude < -90 ||
-    latitude > 90 ||
-    longitude < -180 ||
-    longitude > 180
-  ) {
-    throw new Error("Invalid latitude or longitude");
-  }
-
-  const params = new URLSearchParams({
-    latitude: String(latitude),
-    longitude: String(longitude),
-    current: "sea_surface_temperature",
-    cell_selection: "sea",
-    timezone: "GMT",
-  });
-
-  const url = `${OPEN_METEO_MARINE_URL}?${params.toString()}`;
-
-  console.log("Requesting current SST from Open-Meteo:");
-  console.log(url);
-
-  const result = await fetchJSON(url);
-
-  const sst = result.current?.sea_surface_temperature ?? null;
-  const timestamp = result.current?.time ?? null;
-
-  return {
-    latitude: result.latitude ?? latitude,
-    longitude: result.longitude ?? longitude,
-    sst,
-    timestamp,
-    source: "Open-Meteo Marine API",
-  };
-}
-
 module.exports = {
-  getSST,
+  fetchSST,
 };

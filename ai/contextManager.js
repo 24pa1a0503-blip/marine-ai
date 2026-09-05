@@ -30,16 +30,17 @@ export class ContextManager {
       // Backend /api/pfz returns a list of PFZs.
       // Select the strongest available PFZ for route planning.
       if (Array.isArray(pfzData.pfzs) && pfzData.pfzs.length > 0) {
-        const bestPFZ = [...pfzData.pfzs].sort(
-          (a, b) => (b.pfz_score ?? 0) - (a.pfz_score ?? 0),
+        const nearestPFZ = [...pfzData.pfzs].sort(
+          (a, b) =>
+            Number(a.distanceKm ?? Infinity) - Number(b.distanceKm ?? Infinity),
         )[0];
 
-        this.state.selectedPFZ = bestPFZ;
+        this.state.selectedPFZ = nearestPFZ;
 
         this.state.destination = {
-          name: bestPFZ.name,
-          lat: Number(bestPFZ.latitude),
-          lon: Number(bestPFZ.longitude),
+          name: nearestPFZ.name,
+          lat: Number(nearestPFZ.latitude),
+          lon: Number(nearestPFZ.longitude),
         };
       }
     }

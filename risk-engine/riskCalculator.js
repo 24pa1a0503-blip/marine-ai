@@ -27,6 +27,18 @@ function calculateRisk(data) {
     factors.push("Moderate wind");
   }
 
+  //wind gust
+  if (data.windGust > THRESHOLDS.windGust.high) {
+    score += 40;
+    factors.push("Dangerous wind gusts");
+  } else if (data.windGust > THRESHOLDS.windGust.moderate) {
+    score += 25;
+    factors.push("Strong wind gusts");
+  } else if (data.windGust > THRESHOLDS.windGust.low) {
+    score += 10;
+    factors.push("Moderate wind gusts");
+  }
+
   // Wave height
   if (data.waveHeight > THRESHOLDS.waveHeight.high) {
     score += 40;

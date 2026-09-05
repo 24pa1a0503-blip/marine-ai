@@ -1,5 +1,12 @@
-const { getWeatherConditions } = require("../../services/weatherService");
-const { getMarineConditions } = require("../../services/marineDataService");
+const {
+  getWeatherConditions,
+  getWeatherForecast,
+} = require("../../services/weatherService");
+
+const {
+  getMarineConditions,
+  getMarineForecast,
+} = require("../../services/marineDataService");
 const { getMarineWarnings } = require("../../services/marineWarningService");
 
 function getCoordinates(req) {
@@ -102,9 +109,74 @@ async function getWarnings(req, res) {
     });
   }
 }
+async function getWeatherForecastData(req, res) {
+  try {
+    const coordinates = getCoordinates(req);
+    const targetDate = req.query.targetDate;
+
+    if (!coordinates || !targetDate) {
+      return res.status(400).json({
+        success: false,
+        error: "Valid latitude, longitude, and targetDate are required",
+      });
+    }
+
+    const data = await getWeatherForecast(
+      coordinates.latitude,
+      coordinates.longitude,
+      targetDate,
+    );
+
+    res.json({
+      success: true,
+      ...data,
+    });
+  } catch (error) {
+    console.error("Weather forecast API error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Failed to retrieve weather forecast data",
+    });
+  }
+}
+
+async function getMarineForecastData(req, res) {
+  try {
+    const coordinates = getCoordinates(req);
+    const targetDate = req.query.targetDate;
+
+    if (!coordinates || !targetDate) {
+      return res.status(400).json({
+        success: false,
+        error: "Valid latitude, longitude, and targetDate are required",
+      });
+    }
+
+    const data = await getMarineForecast(
+      coordinates.latitude,
+      coordinates.longitude,
+      targetDate,
+    );
+
+    res.json({
+      success: true,
+      ...data,
+    });
+  } catch (error) {
+    console.error("Marine forecast API error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Failed to retrieve marine forecast data",
+    });
+  }
+}
 
 module.exports = {
   getWeather,
   getOcean,
   getWarnings,
+  getWeatherForecast: getWeatherForecastData,
+  getMarineForecast: getMarineForecastData,
 };
