@@ -10,6 +10,7 @@ const sstRoutes = require("../routes/sstRoutes");
 const liveDataRoutes = require("./routes/liveDataRoutes");
 const geofenceRoutes = require("./routes/geofenceRoutes");
 const marineAnalyzeRoutes = require("./routes/marineAnalyzeRoutes");
+const alertRoutes = require("./routes/alertRoutes");
 const app = express();
 
 app.use(cors());
@@ -35,6 +36,7 @@ app.use("/api", liveDataRoutes);
 app.use("/api/marine", riskRoutes);
 app.use("/api/geofence", geofenceRoutes);
 app.use("/api/marine/analyze", marineAnalyzeRoutes);
+app.use("/api/alerts", alertRoutes);
 
 // ========================================
 // SST API
