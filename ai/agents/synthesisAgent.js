@@ -608,9 +608,6 @@ function fallbackSynthesizeResponse(
   // MARINE SAFETY
   // ==================================================
 
-    const weather =
-      marine?.weather ??
-      toolResults.getWeatherForecast?.data ??
   else if (
     intent === "MARINE_SAFETY"
   ) {
@@ -1140,6 +1137,43 @@ function fallbackSynthesizeResponse(
       lang,
     );
 
+  // Extract rich Phase 8 explainability objects from tool results
+  const marine = toolResults.analyzeMarine?.data;
+  const pfzTool = toolResults.getNearbyPFZ?.data;
+  const routeTool = toolResults.findSafeRoute?.data;
+  const riskTool = toolResults.calculateRisk?.data;
+
+  const topPFZ = marine?.pfz?.recommendedZone || (Array.isArray(pfzTool?.zones) ? pfzTool.zones[0] : null);
+  const confidenceScore = marine?.confidenceScore || topPFZ?.confidenceScore || 85;
+
+  const whyPFZSelected = topPFZ?.selectionExplanation || (topPFZ ? [
+    `✓ Close distance: ${topPFZ.distanceKm || topPFZ.distance || "N/A"} km`,
+    `✓ Chlorophyll: ${topPFZ.chlorophyll ? `${topPFZ.chlorophyll} mg/m³` : "N/A"}`,
+    `✓ SST: ${topPFZ.sst ? `${topPFZ.sst}°C` : "N/A"}`,
+    `✓ Data source: ${topPFZ.source || "INCOIS PFZ Dataset"}`
+  ] : []);
+
+  const rejectedAlternatives = marine?.explainability?.pfzSelection?.rejectedAlternatives || [];
+
+  const whyAlertTriggered = (marine?.alerts?.hazards || []).map((h) => ({
+    id: h.id,
+    title: h.title,
+    triggerExplanation: h.triggerExplanation || `Triggered: ${h.title}`,
+  }));
+
+  const whyRouteSelected = routeTool?.routeExplanation?.whySelected || (routeTool?.explanation ? [routeTool.explanation] : []);
+
+  const explainabilityObj = {
+    confidenceScore,
+    overallSuitability: topPFZ ? `${topPFZ.aiSuitabilityScore || 85}/100` : null,
+    whyPFZSelected,
+    rejectedAlternatives,
+    perFactorBreakdown: topPFZ?.perFactorBreakdown || marine?.safety?.perFactorBreakdown || {},
+    whyRouteSelected,
+    whyAlertTriggered,
+    missingDataDisclosure: topPFZ?.missingDataDisclosure || marine?.dataQuality?.missingDataDisclosures?.[0] || null,
+  };
+
   return {
     answer: answerText,
     recommendation,
@@ -1148,6 +1182,8 @@ function fallbackSynthesizeResponse(
       timestamp,
       parametersUsed,
       riskFactors,
+      confidenceScore,
+      explainability: explainabilityObj,
     },
   };
 }

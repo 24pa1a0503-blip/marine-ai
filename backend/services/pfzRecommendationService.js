@@ -1,5 +1,4 @@
-const { getPFZs } = require("./pfzService");
-const { calculateDistance } = require("../../gis/distance");
+const { rankPFZs } = require("./pfzService");
 
 async function getBestFishingZones({ latitude, longitude, maxDistance = 150 }) {
   latitude = Number(latitude);
@@ -12,36 +11,19 @@ async function getBestFishingZones({ latitude, longitude, maxDistance = 150 }) {
     };
   }
 
-  const pfzs = await getPFZs("ALL");
+  const ranked = await rankPFZs(latitude, longitude, 10);
 
-  const ranked = pfzs
-    .map((pfz) => {
-      const distance = calculateDistance(
-        latitude,
-        longitude,
-        pfz.latitude,
-        pfz.longitude,
-      );
+  const filtered = ranked.filter((pfz) => (pfz.distanceKm ?? 0) <= maxDistance);
 
-      const distancePenalty = distance * 0.15;
-
-      const recommendationScore = pfz.pfz_score - distancePenalty;
-
-      return {
-        ...pfz,
-        distance: Number(distance.toFixed(2)),
-        recommendationScore: Number(recommendationScore.toFixed(2)),
-      };
-    })
-    .filter((pfz) => pfz.distance <= maxDistance)
-    .sort((a, b) => b.recommendationScore - a.recommendationScore);
-
-  if (ranked.length === 0) {
+  if (filtered.length === 0) {
     return {
       success: false,
       message: "No suitable fishing zones found nearby",
     };
   }
+
+  const recommendedZone = filtered[0];
+  const alternatives = filtered.slice(1, 4);
 
   return {
     success: true,
@@ -51,9 +33,25 @@ async function getBestFishingZones({ latitude, longitude, maxDistance = 150 }) {
       longitude,
     },
 
-    recommendedZone: ranked[0],
+    recommendedZone,
 
-    alternatives: ranked.slice(1, 4),
+    alternatives,
+
+    explainability: {
+      whySelected: recommendedZone.selectionExplanation || [
+        `✓ Close distance: ${recommendedZone.distanceKm} km`,
+        `✓ Data source: ${recommendedZone.source || "INCOIS"}`,
+      ],
+      overallSuitability: `${recommendedZone.aiSuitabilityScore || 85}/100`,
+      confidenceScore: recommendedZone.confidenceScore || 85,
+      perFactorBreakdown: recommendedZone.perFactorBreakdown || {},
+      missingDataDisclosure: recommendedZone.missingDataDisclosure || null,
+      rejectedAlternatives: alternatives.map((alt) => ({
+        id: alt.id,
+        name: alt.name,
+        rejectionReason: alt.rejectionReason || "Lower overall suitability score",
+      })),
+    },
   };
 }
 

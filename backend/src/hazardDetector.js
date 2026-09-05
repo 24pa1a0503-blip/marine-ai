@@ -9,7 +9,16 @@ function createHazard({
   unit = null,
   evidence = [],
   recommendation = "CAUTION",
+  triggerExplanation = null,
 }) {
+  const defaultTrigger = triggerExplanation || (
+    value !== null && unit !== null
+      ? `Triggered: ${title} value ${value}${unit} exceeds safety threshold for ${severity} severity`
+      : evidence.length > 0
+        ? `Triggered: ${evidence.join("; ")}`
+        : `Triggered: Hazard condition ${title} detected`
+  );
+
   return {
     id,
     type,
@@ -21,6 +30,7 @@ function createHazard({
     unit,
     evidence,
     recommendation,
+    triggerExplanation: defaultTrigger,
   };
 }
 

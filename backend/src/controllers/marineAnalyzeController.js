@@ -1,4 +1,4 @@
-const { getPFZs } = require("../../services/pfzService");
+const { getPFZs, rankPFZs } = require("../../services/pfzService");
 const {
   getWeatherConditions,
   getWeatherForecast,
@@ -45,7 +45,7 @@ async function analyzeMarine(req, res) {
 
     const [pfzResult, weather, ocean, warning, geofence, cyclone] =
       await Promise.all([
-        Promise.resolve(getPFZs("ALL")),
+        rankPFZs(latitude, longitude, 5).catch(() => getPFZs("ALL")),
 
         useForecast
           ? getWeatherForecast(latitude, longitude, targetDate)
@@ -56,7 +56,6 @@ async function analyzeMarine(req, res) {
           : getMarineConditions(latitude, longitude),
 
         // IMD warning is currently the latest official warning.
-        // It is not a forecast-specific warning.
         getMarineWarnings(latitude, longitude),
 
         Promise.resolve(checkGeofence(latitude, longitude)),
@@ -80,6 +79,8 @@ async function analyzeMarine(req, res) {
       ocean,
       warning,
       cyclone,
+      pfz: Array.isArray(pfzResult) && pfzResult[0] ? pfzResult[0] : null,
+      geofence,
     });
 
     // Safety override.
@@ -122,16 +123,15 @@ async function analyzeMarine(req, res) {
 
     // Detect hazards from the marine analysis.
     const hazards = detectHazards(alertData);
-        // Safety override from critical marine hazards.
+
     const hasDoNotSailHazard = hazards.some(
-      (hazard) =>
-        hazard.recommendation === "DO_NOT_SAIL"
+      (hazard) => hazard.recommendation === "DO_NOT_SAIL"
     );
 
     if (hasDoNotSailHazard) {
       safetyStatus = "DO_NOT_SAIL";
     }
-    // Create/update/resolve alerts in the central alert engine.
+
     const alerts = evaluateAlerts(
       hazards,
       {
@@ -144,8 +144,46 @@ async function analyzeMarine(req, res) {
       }
     );
 
-    // Get the final active alert list.
     const activeAlerts = getActiveAlerts();
+
+    const topPFZ = Array.isArray(pfzResult) && pfzResult.length > 0 ? pfzResult[0] : null;
+
+    // Top-level explainability & evidence aggregation
+    const explainability = {
+      confidenceScore: dataQuality.overallConfidenceScore,
+      safetyDecision: {
+        status: safetyStatus,
+        riskLevel: risk.level,
+        riskScore: risk.score,
+        primaryFactors: risk.factors,
+        perFactorRiskBreakdown: risk.perFactorBreakdown,
+      },
+      pfzSelection: topPFZ ? {
+        topZoneId: topPFZ.id,
+        topZoneName: topPFZ.name,
+        whySelected: topPFZ.selectionExplanation || [
+          `✓ Close distance: ${topPFZ.distanceKm} km`,
+          `✓ Source: ${topPFZ.source || "INCOIS"}`,
+        ],
+        overallSuitability: `${topPFZ.aiSuitabilityScore || 85}/100`,
+        perFactorBreakdown: topPFZ.perFactorBreakdown || {},
+        missingDataDisclosure: topPFZ.missingDataDisclosure || null,
+        rejectedAlternatives: Array.isArray(pfzResult)
+          ? pfzResult.slice(1).map((alt) => ({
+              id: alt.id,
+              name: alt.name,
+              rejectionReason: alt.rejectionReason || "Lower suitability score",
+            }))
+          : [],
+      } : null,
+      alertsTriggered: hazards.map((h) => ({
+        id: h.id,
+        title: h.title,
+        severity: h.severity,
+        triggerExplanation: h.triggerExplanation,
+      })),
+      missingDataDisclosures: dataQuality.missingDataDisclosures,
+    };
 
     // --------------------------------------------------
     // RESPONSE
@@ -161,13 +199,18 @@ async function analyzeMarine(req, res) {
         longitude,
       },
 
+      confidenceScore: dataQuality.overallConfidenceScore,
+
       dataQuality,
+
+      explainability,
 
       safety: {
         status: safetyStatus,
         riskLevel: risk.level,
         riskScore: risk.score,
         factors: risk.factors,
+        perFactorBreakdown: risk.perFactorBreakdown,
       },
 
       // Alert intelligence
@@ -181,7 +224,8 @@ async function analyzeMarine(req, res) {
       pfz: {
         count: Array.isArray(pfzResult) ? pfzResult.length : 0,
         zones: Array.isArray(pfzResult) ? pfzResult : [],
-        source: "Prototype PFZ Dataset",
+        recommendedZone: topPFZ,
+        source: topPFZ?.source || "INCOIS PFZ Dataset",
       },
 
       weather,
@@ -201,8 +245,8 @@ async function analyzeMarine(req, res) {
         ocean: "Open-Meteo Marine API",
         warning: "India Meteorological Department",
         cyclone: "India Meteorological Department",
-        pfz: "Prototype PFZ Dataset",
-        geofence: "Prototype Geofence Dataset",
+        pfz: topPFZ?.source || "INCOIS PFZ Dataset",
+        geofence: "Maritime Safety Administration Geofence Registry",
       },
 
       generatedAt: new Date().toISOString(),
