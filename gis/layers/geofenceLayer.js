@@ -1,12 +1,13 @@
 /**
  * Geofence Layer GeoJSON Generator
- * Converts demo restricted zones into GeoJSON FeatureCollection with [lon, lat] order.
+ * Converts restricted marine zones into GeoJSON FeatureCollection with [lon, lat] order.
  */
-import { DEMO_GEOFENCE_ZONES, DEMO_DISCLAIMER } from '../geofence';
 
-export function createGeofenceGeoJSON() {
-    const features = DEMO_GEOFENCE_ZONES.map(zone => {
-        // Convert [lat, lon] polygon to [lon, lat] for GeoJSON spec
+const { GEOFENCE_ZONES, DEMO_DISCLAIMER } = require('../geofence');
+
+function createGeofenceGeoJSON() {
+    const features = GEOFENCE_ZONES.map(zone => {
+        // Convert [lat, lon] to [lon, lat] for GeoJSON standard
         const geoJsonCoords = zone.polygonLatLon.map(([lat, lon]) => [lon, lat]);
 
         // Ensure closed ring in GeoJSON polygon
@@ -20,14 +21,16 @@ export function createGeofenceGeoJSON() {
             type: "Feature",
             geometry: {
                 type: "Polygon",
-                coordinates: [geoJsonCoords] // GeoJSON format: [[ [lon, lat], [lon, lat], ... ]]
+                coordinates: [geoJsonCoords]
             },
             properties: {
                 id: zone.id,
                 name: zone.name,
+                category: zone.category,
                 type: zone.type,
-                description: zone.description,
                 severity: zone.severity,
+                description: zone.description,
+                reason: zone.reason,
                 isDemoBoundary: true,
                 disclaimer: DEMO_DISCLAIMER
             }
@@ -40,3 +43,7 @@ export function createGeofenceGeoJSON() {
         features
     };
 }
+
+module.exports = {
+    createGeofenceGeoJSON
+};
