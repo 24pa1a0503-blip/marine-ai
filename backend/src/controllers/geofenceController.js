@@ -1,6 +1,6 @@
 /**
  * Express Controller for Geofencing Services
- * Base URL: http://localhost:5000
+ * Combines full Phase 3 Geofence Engine with upstream query handler
  */
 const {
     GEOFENCE_ZONES,
@@ -12,12 +12,34 @@ const {
 
 const { createGeofenceGeoJSON } = require("../../../gis/layers/geofenceLayer");
 
+function getCoordinates(req) {
+  const latitude = Number(req.query.latitude ?? req.query.lat ?? req.body?.latitude);
+  const longitude = Number(req.query.longitude ?? req.query.lon ?? req.body?.longitude);
+
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return null;
+  }
+
+  return { latitude, longitude };
+}
+
 /**
  * GET /api/geofence
  * Returns all defined restricted marine zones, metadata & GeoJSON
+ * If latitude/longitude query params provided, performs point check.
  */
 function getAllGeofences(req, res) {
     try {
+        const coords = getCoordinates(req);
+        if (coords) {
+            const pointCheck = checkPointGeofence(coords.latitude, coords.longitude);
+            return res.json({
+                success: true,
+                status: "ok",
+                ...pointCheck
+            });
+        }
+
         const geoJson = createGeofenceGeoJSON();
         res.json({
             status: "ok",
@@ -35,14 +57,6 @@ function getAllGeofences(req, res) {
 /**
  * POST /api/geofence/check
  * Performs point-in-polygon, distance-to-boundary, PFZ safety enrichment, or route intersection checks.
- *
- * Payload:
- * {
- *   "latitude": 17.6868,
- *   "longitude": 83.2185,
- *   "waypoints": [ { "lat": 16.98, "lon": 82.24 }, { "lat": 16.82, "lon": 82.62 } ],
- *   "pfzs": [ ... ]
- * }
  */
 function checkGeofenceService(req, res) {
     try {
@@ -91,5 +105,6 @@ function checkGeofenceService(req, res) {
 
 module.exports = {
     getAllGeofences,
+    getGeofence: getAllGeofences,
     checkGeofenceService
 };

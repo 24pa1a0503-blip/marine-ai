@@ -2,7 +2,7 @@
  * Express Routes for Geofencing Services
  */
 const express = require("express");
-const { getAllGeofences, checkGeofenceService } = require("../controllers/geofenceController");
+const { getAllGeofences, getGeofence, checkGeofenceService } = require("../controllers/geofenceController");
 
 const router = express.Router();
 
