@@ -1,22 +1,11 @@
 /**
- * Marine AI — Phase 3 Geofencing & Boundary Intersection Engine
+ * Marine AI — Phase 3 Geofencing & Boundary Intersection Engine (Frontend Export)
  * Smart India Hackathon 2026 - Problem Statement ID: 26176
- *
- * Implements:
- * 1. Comprehensive Marine Restricted Zones (IMBL, MPAs, No-Fishing, Shipping Lanes, Cyclone, Temp Hazards)
- * 2. Ray-Casting Point-in-Polygon Detection
- * 3. Distance-to-Boundary Calculation (Distance in km to nearest restricted polygon)
- * 4. Safety Classification: SAFE | CAUTION | RESTRICTED
- * 5. PFZ + Geofence Intersection & Safety Enrichment
- * 6. Route + Geofence Intersection & Hazard Prevention
- * 7. Detailed Explainability (Human-readable reason for every restriction)
  */
 
-const DEMO_DISCLAIMER = "⚠️ Demo boundaries for SIH 2026 prototype. Non-official / Not for real navigation.";
+export const DEMO_DISCLAIMER = "⚠️ Demo boundaries for SIH 2026 prototype. Non-official / Not for real navigation.";
 
-// Comprehensive Indian Marine Restricted & Sensitive Zones
-const GEOFENCE_ZONES = [
-    // 1. International Maritime Boundary Lines (IMBL)
+export const GEOFENCE_ZONES = [
     {
         id: "IMBL_SRI_LANKA",
         name: "International Maritime Boundary Line (India - Sri Lanka)",
@@ -50,8 +39,6 @@ const GEOFENCE_ZONES = [
             [23.60, 67.50]
         ]
     },
-
-    // 2. Marine Protected Areas (MPAs - Ecosystem & Wildlife Sanctuaries)
     {
         id: "MPA_CORINGA",
         name: "Coringa Wildlife Sanctuary (Marine Protected Area)",
@@ -82,8 +69,6 @@ const GEOFENCE_ZONES = [
             [9.00, 79.10]
         ]
     },
-
-    // 3. No-Fishing & Ecologically Sensitive Zones (Seasonal Breeding)
     {
         id: "NO_FISH_GAHIRMATHA",
         name: "Gahirmatha Turtle Sanctuary & No-Fishing Zone",
@@ -99,8 +84,6 @@ const GEOFENCE_ZONES = [
             [20.40, 86.90]
         ]
     },
-
-    // 4. Shipping & Commercial Navigation Channels
     {
         id: "SHIP_VISAKHAPATNAM",
         name: "Visakhapatnam Harbor Approach & Shipping Channel",
@@ -116,8 +99,6 @@ const GEOFENCE_ZONES = [
             [17.65, 83.28]
         ]
     },
-
-    // 5. Cyclone & Extreme Weather Danger Zones
     {
         id: "CYCLONE_HAZARD_BUFFER",
         name: "Active Storm / Cyclone High-Wave Hazard Zone",
@@ -133,8 +114,6 @@ const GEOFENCE_ZONES = [
             [16.80, 85.00]
         ]
     },
-
-    // 6. Temporary Hazard & Naval Defense Zones
     {
         id: "NAVAL_DEFENSE_ZONE",
         name: "Eastern Naval Command Firing & Defense Exercise Zone",
@@ -152,11 +131,10 @@ const GEOFENCE_ZONES = [
     }
 ];
 
-/**
- * Calculates Haversine distance in kilometers
- */
+export const DEMO_GEOFENCE_ZONES = GEOFENCE_ZONES;
+
 function calculateHaversineKm(lat1, lon1, lat2, lon2) {
-    const R = 6371; // Earth radius in km
+    const R = 6371;
     const dLat = (lat2 - lat1) * (Math.PI / 180);
     const dLon = (lon2 - lon1) * (Math.PI / 180);
     const rLat1 = lat1 * (Math.PI / 180);
@@ -170,9 +148,6 @@ function calculateHaversineKm(lat1, lon1, lat2, lon2) {
     return parseFloat((R * c).toFixed(2));
 }
 
-/**
- * Ray-Casting Point-in-Polygon Check
- */
 function isPointInPolygon(lat, lon, polygon) {
     let inside = false;
     for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
@@ -186,30 +161,18 @@ function isPointInPolygon(lat, lon, polygon) {
     return inside;
 }
 
-/**
- * Calculates distance from point (lat, lon) to nearest point on polygon perimeter
- */
 function getMinDistanceToPolygonKm(lat, lon, polygon) {
     let minDistance = Infinity;
     for (let i = 0; i < polygon.length; i++) {
         const pLat = polygon[i][0];
         const pLon = polygon[i][1];
         const dist = calculateHaversineKm(lat, lon, pLat, pLon);
-        if (dist < minDistance) {
-            minDistance = dist;
-        }
+        if (dist < minDistance) minDistance = dist;
     }
     return minDistance;
 }
 
-/**
- * Checks a single coordinate against all restricted geofence zones.
- *
- * @param {number|Object} lat Latitude or object {lat, lon}
- * @param {number} [lon] Longitude
- * @returns {Object} Comprehensive Geofence Check Result
- */
-function checkPointGeofence(lat, lon) {
+export function checkPointGeofence(lat, lon) {
     if (typeof lat === 'object' && lat !== null) {
         lon = lat.lon || lat.longitude;
         lat = lat.lat || lat.latitude;
@@ -235,12 +198,10 @@ function checkPointGeofence(lat, lon) {
         if (inside) {
             insideZones.push(zone);
         } else if (distToBoundary <= 10.0 || zone.severity === "MODERATE") {
-            // Caution buffer zone within 10km of restricted boundary
             cautionZones.push({ ...zone, distToBoundaryKm: distToBoundary });
         }
     }
 
-    // Determine Classification: RESTRICTED | CAUTION | SAFE
     let classification = "SAFE";
     let severity = "NONE";
     let warningMessage = null;
@@ -263,7 +224,7 @@ function checkPointGeofence(lat, lon) {
     return {
         latitude: lat,
         longitude: lon,
-        classification, // SAFE | CAUTION | RESTRICTED
+        classification,
         status: classification === "RESTRICTED" ? "BLOCKED" : classification === "CAUTION" ? "CAUTION" : "ALLOWED",
         severity,
         isInside: insideZones.length > 0,
@@ -277,10 +238,7 @@ function checkPointGeofence(lat, lon) {
     };
 }
 
-/**
- * Checks an array of PFZ objects against geofences and enriches them with safety tags.
- */
-function checkPFZsGeofence(pfzList) {
+export function checkPFZsGeofence(pfzList) {
     if (!pfzList || !Array.isArray(pfzList)) return [];
 
     return pfzList.map(pfz => {
@@ -290,7 +248,7 @@ function checkPFZsGeofence(pfzList) {
 
         return {
             ...pfz,
-            geofenceClassification: geoCheck.classification, // SAFE | CAUTION | RESTRICTED
+            geofenceClassification: geoCheck.classification,
             isRestricted: geoCheck.classification === "RESTRICTED",
             geofenceSeverity: geoCheck.severity,
             distanceToBoundaryKm: geoCheck.nearestBoundaryDistanceKm,
@@ -300,9 +258,6 @@ function checkPFZsGeofence(pfzList) {
     });
 }
 
-/**
- * Line Segment Intersection Helper
- */
 function segmentsIntersect(p1, p2, q1, q2) {
     function ccw(a, b, c) {
         return (c.lon - a.lon) * (b.lat - a.lat) > (b.lon - a.lon) * (c.lat - a.lat);
@@ -315,16 +270,12 @@ function lineIntersectsPolygon(p1, p2, polygon) {
         const q1 = { lat: polygon[i][0], lon: polygon[i][1] };
         const nextIdx = (i + 1) % polygon.length;
         const q2 = { lat: polygon[nextIdx][0], lon: polygon[nextIdx][1] };
-
         if (segmentsIntersect(p1, p2, q1, q2)) return true;
     }
     return false;
 }
 
-/**
- * Checks a proposed vessel route (array of [{lat, lon}]) against all geofence zones.
- */
-function checkRouteGeofence(waypoints) {
+export function checkRouteGeofence(waypoints) {
     if (!waypoints || waypoints.length < 2) {
         return {
             classification: "SAFE",
@@ -361,7 +312,7 @@ function checkRouteGeofence(waypoints) {
         : "Route is 100% clear of all restricted marine zones.";
 
     return {
-        classification, // SAFE | RESTRICTED
+        classification,
         status: crossesRestricted ? "ROUTE_HAZARD_WARNING" : "ROUTE_SAFE",
         crossesRestricted,
         breachedZones,
@@ -369,17 +320,4 @@ function checkRouteGeofence(waypoints) {
         explanation,
         disclaimer: DEMO_DISCLAIMER
     };
-}
-
-// Universal Export Support (Node.js CommonJS & ES Module)
-const GeofenceEngine = {
-    DEMO_DISCLAIMER,
-    GEOFENCE_ZONES,
-    checkPointGeofence,
-    checkPFZsGeofence,
-    checkRouteGeofence
-};
-
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = GeofenceEngine;
 }
