@@ -6,14 +6,7 @@ dotenv.config();
 
 /**
  * Classifies user intent and outputs structured JSON metadata.
- * Supported intents:
- * - PFZ_SEARCH
- * - MARINE_SAFETY
- * - SAFE_ROUTE
- * - MARINE_CONDITIONS
- * - GEOFENCE_CHECK
- * - HAZARD_ALERT
- * - GENERAL_QUERY
+ * Supports Multi-Turn Reference & Pronoun Resolution + Telugu Script.
  */
 export async function detectIntent(userQuery, context = {}) {
   if (!userQuery || typeof userQuery !== "string" || userQuery.trim() === "") {
@@ -22,46 +15,98 @@ export async function detectIntent(userQuery, context = {}) {
       locationRequired: false,
       timeRequired: false,
       destinationRequired: false,
-      language: "en",
+      language: context?.language || "en",
       confidence: 1.0,
       reasoning: "Empty or invalid user query provided.",
     };
   }
 
-  // Context-aware follow-up detection
-  // Resolve references such as "there", "that zone", and "that place"
-  // using the previously selected PFZ.
-  if (context?.selectedPFZ) {
-    const query = userQuery.toLowerCase();
+  const detectedLang = detectLanguage(userQuery);
+  const activeLanguage = detectedLang !== "en" ? detectedLang : (context?.language || "en");
+  const query = userQuery.toLowerCase().trim();
 
-    const refersToPreviousPFZ =
+  // =====================================================
+  // MULTI-TURN CONTEXT-AWARE FOLLOW-UP RESOLUTION
+  // =====================================================
+
+  // 1. Ordinal/Closest PFZ follow-up ("which one is closest?", "the second one", "2nd zone")
+  if (Array.isArray(context?.pfzList) && context.pfzList.length > 0) {
+    if (
+      query.includes("closest") ||
+      query.includes("nearest") ||
+      query.includes("which one is closest") ||
+      query.includes("సమీప") ||
+      query.includes("మొదటిది")
+    ) {
+      return {
+        intent: "PFZ_SEARCH",
+        locationRequired: true,
+        timeRequired: false,
+        destinationRequired: false,
+        language: activeLanguage,
+        confidence: 0.99,
+        resolvedPFZ: context.pfzList[0],
+        reasoning: "Follow-up query requesting closest PFZ from previous result set.",
+      };
+    }
+
+    if (
+      query.includes("second") ||
+      query.includes("2nd") ||
+      query.includes("రెండోది") ||
+      query.includes("రెండవది")
+    ) {
+      const selected = context.pfzList[1] || context.pfzList[0];
+      return {
+        intent: "PFZ_SEARCH",
+        locationRequired: true,
+        timeRequired: false,
+        destinationRequired: false,
+        language: activeLanguage,
+        confidence: 0.99,
+        resolvedPFZ: selected,
+        reasoning: `Follow-up query requesting 2nd PFZ: ${selected.id || selected.name}.`,
+      };
+    }
+  }
+
+  // 2. Reference to previously selected PFZ ("there", "that zone", "that place", "is it safe tomorrow?")
+  if (context?.selectedPFZ || context?.pfzList?.length > 0) {
+    const activePFZ = context.selectedPFZ || context.pfzList[0];
+
+    const refersToPFZ =
       query.includes("there") ||
       query.includes("that zone") ||
       query.includes("that place") ||
-      query.includes("that pfz") ||
       query.includes("this zone") ||
-      query.includes("this place");
+      query.includes("is it safe") ||
+      query.includes("can i go") ||
+      query.includes("tomorrow") ||
+      query.includes("ఆ ప్రాంతం") ||
+      query.includes("అక్కడ") ||
+      query.includes("రేపు") ||
+      query.includes("వెళ్లవచ్చా");
 
-    if (refersToPreviousPFZ) {
-      // Marine conditions follow-up
+    if (refersToPFZ) {
+      // Check Route FIRST so "safest route" matches SAFE_ROUTE before general safe check
       if (
-        query.includes("condition") ||
-        query.includes("weather") ||
-        query.includes("wave") ||
-        query.includes("wind") ||
-        query.includes("current") ||
-        query.includes("temperature") ||
-        query.includes("sea") ||
-        query.includes("tide")
+        query.includes("route") ||
+        query.includes("path") ||
+        query.includes("way to") ||
+        query.includes("navigation") ||
+        query.includes("దోవ") ||
+        query.includes("రహదారి") ||
+        query.includes("మార్గాలు")
       ) {
         return {
-          intent: "MARINE_CONDITIONS",
+          intent: "SAFE_ROUTE",
           locationRequired: true,
-          timeRequired: true,
-          destinationRequired: false,
-          language: detectLanguage(userQuery),
+          timeRequired: false,
+          destinationRequired: true,
+          language: activeLanguage,
           confidence: 0.99,
-          reasoning: `Follow-up marine conditions query referring to previously selected PFZ: ${context.selectedPFZ.name || "selected PFZ"}.`,
+          resolvedPFZ: activePFZ,
+          reasoning: `Multi-turn route follow-up referring to PFZ: ${activePFZ.name || activePFZ.id}.`,
         };
       }
 
@@ -72,39 +117,49 @@ export async function detectIntent(userQuery, context = {}) {
         query.includes("danger") ||
         query.includes("can i go") ||
         query.includes("should i go") ||
-        query.includes("go fishing")
+        query.includes("go fishing") ||
+        query.includes("వేటకు వెళ్ళవచ్చా") ||
+        query.includes("సురక్షితమేనా") ||
+        query.includes("ప్రమాదమా")
       ) {
         return {
           intent: "MARINE_SAFETY",
           locationRequired: true,
           timeRequired: true,
           destinationRequired: false,
-          language: detectLanguage(userQuery),
+          language: activeLanguage,
           confidence: 0.99,
-          reasoning: `Follow-up safety query referring to previously selected PFZ: ${context.selectedPFZ.name || "selected PFZ"}.`,
+          resolvedPFZ: activePFZ,
+          reasoning: `Multi-turn safety follow-up referring to PFZ: ${activePFZ.name || activePFZ.id}.`,
         };
       }
 
-      // Route follow-up
+      // Conditions follow-up
       if (
-        query.includes("route") ||
-        query.includes("path") ||
-        query.includes("way to") ||
-        query.includes("navigation")
+        query.includes("condition") ||
+        query.includes("weather") ||
+        query.includes("wave") ||
+        query.includes("wind") ||
+        query.includes("temperature") ||
+        query.includes(" sea") ||
+        query.includes("వాతావరణం") ||
+        query.includes("అలలు")
       ) {
         return {
-          intent: "SAFE_ROUTE",
+          intent: "MARINE_CONDITIONS",
           locationRequired: true,
-          timeRequired: false,
-          destinationRequired: true,
-          language: detectLanguage(userQuery),
+          timeRequired: true,
+          destinationRequired: false,
+          language: activeLanguage,
           confidence: 0.99,
-          reasoning: `Follow-up route query referring to previously selected PFZ: ${context.selectedPFZ.name || "selected PFZ"}.`,
+          resolvedPFZ: activePFZ,
+          reasoning: `Multi-turn weather conditions follow-up referring to PFZ: ${activePFZ.name || activePFZ.id}.`,
         };
       }
     }
   }
 
+  // LLM Intent Classification if API key exists
   const apiKey = process.env.GEMINI_API_KEY;
 
   if (apiKey && apiKey.trim() !== "" && apiKey !== "your_gemini_api_key_here") {
@@ -115,32 +170,11 @@ export async function detectIntent(userQuery, context = {}) {
         generationConfig: { responseMimeType: "application/json" },
       });
 
-      const contextInfo = context?.selectedPFZ
-        ? `
-Previous conversation context:
-- Selected PFZ: ${context.selectedPFZ.name || "Unknown"}
-- PFZ latitude: ${context.selectedPFZ.latitude ?? "unavailable"}
-- PFZ longitude: ${context.selectedPFZ.longitude ?? "unavailable"}
-- Distance: ${context.selectedPFZ.distanceKm ?? "unavailable"} km
-
-The user may use references such as "there", "that zone", "there today", or "that place" to refer to this selected PFZ.
-`
-        : `
-No previously selected PFZ is available in the conversation context.
-`;
-
       const response = await model.generateContent(
         `${INTENT_SYSTEM_PROMPT}
 
-${contextInfo}
-
-Important contextual intent rules:
-- If the user asks about "conditions", "weather", "sea", "waves", "wind", "tide", or similar conditions while referring to "there", "that zone", "that place", or the previously selected PFZ, classify as MARINE_CONDITIONS.
-- If the user asks whether it is safe to go there, classify as MARINE_SAFETY.
-- If the user asks for a route to there/that zone, classify as SAFE_ROUTE.
-- Use the previous context to resolve references instead of classifying them as GENERAL_QUERY.
-
-User Query: "${userQuery}"`,
+User Query: "${userQuery}"
+Context Language: "${activeLanguage}"`
       );
       const text = response.response.text();
       const parsed = JSON.parse(text);
@@ -151,51 +185,37 @@ User Query: "${userQuery}"`,
           locationRequired: Boolean(parsed.locationRequired),
           timeRequired: Boolean(parsed.timeRequired),
           destinationRequired: Boolean(parsed.destinationRequired),
-          language: parsed.language || detectLanguage(userQuery),
+          language: parsed.language || activeLanguage,
           confidence: parsed.confidence || 0.95,
           reasoning: parsed.reasoning || "Classified via Gemini LLM",
         };
       }
     } catch (err) {
-      console.warn(
-        "  [IntentAgent] LLM API call failed or key invalid. Switching to deterministic fallback. Error:",
-        err.message,
-      );
+      console.warn("  [IntentAgent] LLM API call failed. Using deterministic classifier.");
     }
   }
 
-  // Deterministic Fallback Classifier
-  return fallbackDetectIntent(userQuery);
+  // Fallback rule-based classifier
+  return fallbackDetectIntent(userQuery, activeLanguage);
 }
 
-/**
- * Helper to detect basic language scripts
- */
 function detectLanguage(text) {
-  // Telugu Unicode block range \u0C00-\u0C7F
-  if (/[\u0C00-\u0C7F]/.test(text)) return "te";
-  // Hindi (Devanagari) Unicode block range \u0900-\u097F
-  if (/[\u0900-\u097F]/.test(text)) return "hi";
-  // Tamil Unicode block range \u0B80-\u0BFF
-  if (/[\u0B80-\u0BFF]/.test(text)) return "ta";
+  if (/[\u0C00-\u0C7F]/.test(text)) return "te"; // Telugu
+  if (/[\u0900-\u097F]/.test(text)) return "hi"; // Hindi
+  if (/[\u0B80-\u0BFF]/.test(text)) return "ta"; // Tamil
   return "en";
 }
 
-/**
- * Fallback rule-based classifier ensuring test suite passes deterministically
- */
-function fallbackDetectIntent(userQuery) {
+function fallbackDetectIntent(userQuery, activeLanguage = "en") {
   const query = userQuery.toLowerCase();
-  const lang = detectLanguage(userQuery);
+  const lang = activeLanguage || detectLanguage(userQuery);
 
-  // 1. HAZARD_ALERT check
+  // 1. HAZARD_ALERT
   if (
     query.includes("alert") ||
     query.includes("warning") ||
     query.includes("cyclone") ||
-    query.includes("tsunami") ||
     query.includes("storm") ||
-    query.includes("emergency") ||
     query.includes("ప్రమాదం") ||
     query.includes("హెచ్చరిక")
   ) {
@@ -206,19 +226,19 @@ function fallbackDetectIntent(userQuery) {
       destinationRequired: false,
       language: lang,
       confidence: 0.97,
-      reasoning:
-        "Query asks about active weather warnings, cyclone alerts, or emergency hazards.",
+      reasoning: "Query asks about active weather warnings or cyclone alerts.",
     };
   }
 
-  // 2. SAFE_ROUTE check
+  // 2. SAFE_ROUTE
   if (
     query.includes("route") ||
     query.includes("path") ||
     query.includes("navigation") ||
     query.includes("way to") ||
     query.includes("దోవ") ||
-    query.includes("రహదారి")
+    query.includes("రహదారి") ||
+    query.includes("మార్గాలు")
   ) {
     return {
       intent: "SAFE_ROUTE",
@@ -227,12 +247,11 @@ function fallbackDetectIntent(userQuery) {
       destinationRequired: true,
       language: lang,
       confidence: 0.98,
-      reasoning:
-        "Query explicitly requests route, path, or safe navigation instructions.",
+      reasoning: "Query requests safe route navigation instructions.",
     };
   }
 
-  // 3. MARINE_SAFETY check
+  // 3. MARINE_SAFETY
   if (
     query.includes("safe") ||
     query.includes("can i go") ||
@@ -240,39 +259,30 @@ function fallbackDetectIntent(userQuery) {
     query.includes("fishing tomorrow") ||
     query.includes("risk") ||
     query.includes("danger") ||
-    query.includes("safety") ||
     query.includes("go fishing") ||
     query.includes("వేటకు వెళ్ళవచ్చా") ||
     query.includes("సురక్షితమేనా")
   ) {
-    const timeReq =
-      query.includes("tomorrow") ||
-      query.includes("morning") ||
-      query.includes("today") ||
-      query.includes("tonight") ||
-      query.includes("రేపు");
     return {
       intent: "MARINE_SAFETY",
       locationRequired: true,
-      timeRequired: timeReq,
+      timeRequired: true,
       destinationRequired: false,
       language: lang,
       confidence: 0.96,
-      reasoning:
-        "Query asks about safety, trip feasibility, or fishing permission.",
+      reasoning: "Query asks about marine safety or fishing trip feasibility.",
     };
   }
 
-  // 4. PFZ_SEARCH check
+  // 4. PFZ_SEARCH
   if (
     query.includes("pfz") ||
-    query.includes("potential fishing zone") ||
     query.includes("fishing zone") ||
     query.includes("nearest pfz") ||
     query.includes("where is the nearest") ||
     query.includes("catch fish") ||
-    query.includes("fish concentration") ||
-    query.includes("చేపల మండలం")
+    query.includes("చేపల మండలం") ||
+    query.includes("చేపలు")
   ) {
     return {
       intent: "PFZ_SEARCH",
@@ -281,25 +291,20 @@ function fallbackDetectIntent(userQuery) {
       destinationRequired: false,
       language: lang,
       confidence: 0.99,
-      reasoning:
-        "Query asks for Potential Fishing Zone location or nearest fishing spot.",
+      reasoning: "Query asks for Potential Fishing Zone locations.",
     };
   }
 
-  // 5. MARINE_CONDITIONS check
+  // 5. MARINE_CONDITIONS
   if (
     query.includes("weather") ||
     query.includes("wave") ||
     query.includes("wind") ||
-    query.includes("current") ||
     query.includes("temperature") ||
-    query.includes("sea condition") ||
-    query.includes("tide") ||
+    query.includes("sea") ||
     query.includes("వాతావరణం") ||
     query.includes("అలలు") ||
-    query.includes("సముద్ర పరిస్థితులు") ||
-    query.includes("సముద్రం") ||
-    query.includes("సముద్ర")
+    query.includes("సముద్రం")
   ) {
     return {
       intent: "MARINE_CONDITIONS",
@@ -308,18 +313,16 @@ function fallbackDetectIntent(userQuery) {
       destinationRequired: false,
       language: lang,
       confidence: 0.95,
-      reasoning: "Query asks for oceanographic or weather metrics.",
+      reasoning: "Query asks for ocean weather or sea metrics.",
     };
   }
 
-  // 6. GEOFENCE_CHECK check
+  // 6. GEOFENCE_CHECK
   if (
     query.includes("border") ||
     query.includes("geofence") ||
     query.includes("restricted") ||
     query.includes("imbl") ||
-    query.includes("international line") ||
-    query.includes("legal zone") ||
     query.includes("హద్దు")
   ) {
     return {
@@ -329,12 +332,11 @@ function fallbackDetectIntent(userQuery) {
       destinationRequired: false,
       language: lang,
       confidence: 0.96,
-      reasoning:
-        "Query asks about boundary limits or restricted maritime zones.",
+      reasoning: "Query asks about boundary limits or restricted zones.",
     };
   }
 
-  // 7. GENERAL_QUERY default
+  // 7. GENERAL_QUERY
   return {
     intent: "GENERAL_QUERY",
     locationRequired: false,
@@ -342,7 +344,6 @@ function fallbackDetectIntent(userQuery) {
     destinationRequired: false,
     language: lang,
     confidence: 0.85,
-    reasoning:
-      "Query classified as general conversation or non-maritime inquiry.",
+    reasoning: "General query or non-maritime inquiry.",
   };
 }

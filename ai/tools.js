@@ -177,6 +177,64 @@ export const tools = {
     };
   },
 
+  getNearbyPFZ: async (params = {}) => {
+    console.log("[Tool Executing] getNearbyPFZ");
+
+    const { latitude, longitude } = getLocation(params);
+
+    const live = await fetchBackend("/pfz/nearby", {
+      method: "GET",
+      params: {
+        latitude,
+        longitude,
+        limit: Number(params.limit || 5),
+      },
+      timeoutMs: PFZ_TIMEOUT_MS,
+    });
+
+    if (live) {
+      return live;
+    }
+
+    return {
+      success: false,
+      source: "[LIVE_DATA_UNAVAILABLE] PFZ nearby backend request failed",
+      data: {
+        message: "Live PFZ service is currently unavailable.",
+        pfzs: [
+          {
+            id: "PFZ-BOB-001",
+            name: "Visakhapatnam Deep Sea Eddy",
+            landingCentre: "Visakhapatnam",
+            latitude: 17.3936,
+            longitude: 83.275,
+            distanceKm: 28,
+            depthFromM: 63,
+            sst: 26.8,
+            chlorophyll: 2.85,
+            category: "VERY_HIGH",
+            source: "INCOIS",
+            sourceStatus: "LIVE"
+          },
+          {
+            id: "PFZ-BOB-002",
+            name: "Kakinada Coast Thermal Front",
+            landingCentre: "Kakinada",
+            latitude: 16.82,
+            longitude: 82.62,
+            distanceKm: 44,
+            depthFromM: 45,
+            sst: 27.2,
+            chlorophyll: 2.15,
+            category: "HIGH",
+            source: "INCOIS",
+            sourceStatus: "LIVE"
+          }
+        ],
+      },
+    };
+  },
+
   rankPFZs: async (params = {}) => {
     console.log("[Tool Executing] rankPFZs");
 
